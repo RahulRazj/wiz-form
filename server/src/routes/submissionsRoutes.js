@@ -3,6 +3,7 @@ import multer from "multer";
 import { MAX_FILE_SIZE, MAX_PRODUCT_IMAGES, MAX_LIMIT, ORDER_STATUS_VALUES } from "../config.js";
 import { enforceSubmissionRateLimit } from "../middleware/rateLimiter.js";
 import { requireAdminToken } from "../middleware/adminAuth.js";
+import { requireCourierWebhookToken } from "../middleware/courierAuth.js";
 import { normalizeText, clampNumber } from "../utils/text.js";
 import {
     validateAllowedFields,
@@ -15,6 +16,7 @@ import {
     listSubmissions,
     getSubmissionByReference,
     updateSubmissionStatus,
+    updateTrackingId,
     getOrderStats
 } from "../services/submissionService.js";
 
@@ -89,7 +91,13 @@ router.patch("/:id/status", requireAdminToken, async (req, res, next) => {
             });
         }
 
-        const enrichedSubmission = await updateSubmissionStatus(id, requestedStatus);
+        let productPrice = Number(req.body?.productPrice);
+
+        if (!Number.isFinite(productPrice) || productPrice <= 0) {
+            return res.status(400).json({ error: "productPrice must be a positive number." });
+        }
+
+        const enrichedSubmission = await updateSubmissionStatus(id, requestedStatus, productPrice);
 
         if (!enrichedSubmission) {
             return res.status(404).json({ error: "Submission not found." });
@@ -109,7 +117,8 @@ router.get("/", requireAdminToken, async (req, res, next) => {
             fromDate: normalizeText(req.query.fromDate),
             toDate: normalizeText(req.query.toDate),
             search: normalizeText(req.query.search).replace(/,/g, " ").trim(),
-            hasReceipt: normalizeText(req.query.hasReceipt).toLowerCase()
+            hasReceipt: normalizeText(req.query.hasReceipt).toLowerCase(),
+            status: normalizeText(req.query.status).toLowerCase()
         });
 
         res.json(result);
@@ -122,6 +131,28 @@ router.get("/stats", requireAdminToken, async (req, res, next) => {
     try {
         const stats = await getOrderStats();
         res.json({ data: stats });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Called by the courier service once a shipment is created; not admin-facing.
+router.patch("/tracking", requireCourierWebhookToken, async (req, res, next) => {
+    try {
+        const orderId = normalizeText(req.body?.orderId);
+        const trackingId = normalizeText(req.body?.trackingId);
+
+        if (!orderId || !trackingId) {
+            return res.status(400).json({ error: "orderId and trackingId are required." });
+        }
+
+        const enrichedSubmission = await updateTrackingId(orderId, trackingId);
+
+        if (!enrichedSubmission) {
+            return res.status(404).json({ error: "Submission not found." });
+        }
+
+        res.json({ data: enrichedSubmission });
     } catch (error) {
         next(error);
     }

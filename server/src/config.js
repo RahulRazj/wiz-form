@@ -32,10 +32,11 @@ export const MAX_FILE_SIZE = 5 * 1024 * 1024;
 export const MAX_PRODUCT_IMAGES = 5;
 export const MAX_LIMIT = 100;
 
-export const ORDER_STATUS_VALUES = ["placed", "created", "delivered"];
-export const DEFAULT_ORDER_STATUS = "placed";
+export const ORDER_STATUS_VALUES = ["pending", "placed", "created", "dispatched", "delivered", "exchange"];
+export const DEFAULT_ORDER_STATUS = "pending";
 
 export const ADMIN_SECRET_TOKEN = process.env.ADMIN_SECRET_TOKEN || "";
+export const COURIER_WEBHOOK_SECRET = process.env.COURIER_WEBHOOK_SECRET || "";
 
 export const SUBMISSION_RATE_WINDOW_MS = 15 * 60 * 1000;
 export const SUBMISSION_RATE_LIMIT = 12;
@@ -46,6 +47,7 @@ export const ALLOWED_SUBMISSION_FIELDS = new Set([
     "address",
     "city",
     "advanceAmount",
+    "productSize",
     "terms"
 ]);
 

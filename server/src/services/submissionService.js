@@ -30,13 +30,17 @@ export function normalizeOrderStatus(value) {
 }
 
 export function getSubmissionPublicFields(submission) {
+    const productPrice = submission.productPrice != null ? Number(submission.productPrice) : null;
+
     return {
         ...submission,
         productImageUrls: [],
         receiptImageUrl: getStoragePublicUrl(submission.receiptImage),
         productImage: getStoragePublicUrl(submission.productImage),
         orderId: submission.orderId || submission.orderid || null,
-        status: normalizeOrderStatus(submission.status)
+        status: normalizeOrderStatus(submission.status),
+        productPrice,
+        remainingCod: productPrice != null ? productPrice - Number(submission.advanceAmount || 0) : null
     };
 }
 
@@ -78,6 +82,7 @@ export async function createSubmission(body, files) {
         phone: body.phone,
         city: normalizeText(body.city),
         productImage: primaryProductUpload ? getStoragePublicUrl(primaryProductUpload.path) : null,
+        productSize: normalizeText(body.productSize) || null,
         advanceAmount: body.advanceAmount,
         receiptImage: receiptUpload ? getStoragePublicUrl(receiptUpload.path) : null,
         address: normalizeText(body.address),
@@ -112,7 +117,7 @@ export async function createSubmission(body, files) {
 export async function listSubmissions(query) {
     const limit = query.limit;
     const page = query.page;
-    const { fromDate, toDate, search, hasReceipt } = query;
+    const { fromDate, toDate, search, hasReceipt, status } = query;
     const offset = (page - 1) * limit;
 
     let dbQuery = supabase
@@ -149,6 +154,10 @@ export async function listSubmissions(query) {
         dbQuery = dbQuery.is("receiptImage", null);
     }
 
+    if (status && ORDER_STATUS_VALUES.includes(status)) {
+        dbQuery = dbQuery.eq("status", status);
+    }
+
     const { data, error, count } = await dbQuery;
 
     if (error) {
@@ -170,7 +179,8 @@ export async function listSubmissions(query) {
             fromDate: fromDate || null,
             toDate: toDate || null,
             search: search || null,
-            hasReceipt: hasReceipt === "true" ? true : hasReceipt === "false" ? false : null
+            hasReceipt: hasReceipt === "true" ? true : hasReceipt === "false" ? false : null,
+            status: status || null
         }
     };
 }
@@ -189,10 +199,16 @@ export async function getSubmissionByReference(submissionReference) {
     return enrichSubmission(data);
 }
 
-export async function updateSubmissionStatus(id, status) {
+export async function updateSubmissionStatus(id, status, productPrice) {
+    const updatePayload = { status };
+
+    if (productPrice !== undefined) {
+        updatePayload.productPrice = productPrice;
+    }
+
     const { data, error } = await supabase
         .from(SUPABASE_TABLE)
-        .update({ status })
+        .update(updatePayload)
         .eq("id", id)
         .select("*")
         .single();
@@ -205,6 +221,31 @@ export async function updateSubmissionStatus(id, status) {
         }
 
         throw new Error(`Failed to update order status: ${error.message}`);
+    }
+
+    if (!data) {
+        return null;
+    }
+
+    return enrichSubmission(data);
+}
+
+export async function updateTrackingId(orderId, trackingId) {
+    const { data, error } = await supabase
+        .from(SUPABASE_TABLE)
+        .update({ trackingId })
+        .eq("orderId", orderId)
+        .select("*")
+        .single();
+
+    if (error) {
+        if (String(error.message || "").toLowerCase().includes("trackingid")) {
+            throw new Error(
+                `Your Supabase table ${SUPABASE_TABLE} is missing the trackingId column. Run server/migrations/001_create_order_submissions.sql in the Supabase SQL editor, then retry.`
+            );
+        }
+
+        throw new Error(`Failed to update tracking id: ${error.message}`);
     }
 
     if (!data) {
@@ -227,25 +268,44 @@ function getRangeBoundaries(now) {
 }
 
 function createEmptyRangeBucket() {
-    return { count: 0, totalAmount: 0 };
+    return {
+        count: 0,
+        pricedCount: 0,
+        advanceReceived: 0,
+        totalSales: 0,
+        pendingCod: 0,
+        statusBreakdown: { pending: 0, placed: 0, created: 0, dispatched: 0, delivered: 0, exchange: 0 }
+    };
 }
 
-function addToBucket(bucket, amount) {
+function addToBucket(bucket, { advanceAmount, productPrice, status }) {
     bucket.count += 1;
-    bucket.totalAmount += Number.isFinite(amount) ? amount : 0;
+    bucket.advanceReceived += Number.isFinite(advanceAmount) ? advanceAmount : 0;
+
+    if (productPrice != null) {
+        bucket.pricedCount += 1;
+        bucket.totalSales += productPrice;
+        bucket.pendingCod += productPrice - (Number.isFinite(advanceAmount) ? advanceAmount : 0);
+    }
+
+    bucket.statusBreakdown[status] += 1;
 }
 
 function roundBucket(bucket) {
     return {
         count: bucket.count,
-        totalAmount: Math.round(bucket.totalAmount * 100) / 100
+        pricedCount: bucket.pricedCount,
+        advanceReceived: Math.round(bucket.advanceReceived * 100) / 100,
+        totalSales: Math.round(bucket.totalSales * 100) / 100,
+        pendingCod: Math.round(bucket.pendingCod * 100) / 100,
+        statusBreakdown: bucket.statusBreakdown
     };
 }
 
 export async function getOrderStats() {
     const { data, error } = await supabase
         .from(SUPABASE_TABLE)
-        .select("id, created_at, advanceAmount, status, receiptImage");
+        .select("id, created_at, advanceAmount, productPrice, status, receiptImage");
 
     if (error) {
         throw new Error(`Failed to load order statistics: ${error.message}`);
@@ -262,33 +322,33 @@ export async function getOrderStats() {
         allTime: createEmptyRangeBucket()
     };
 
-    const statusBreakdown = { placed: 0, created: 0, delivered: 0 };
     const receipts = { withReceipt: 0, withoutReceipt: 0 };
 
     (data || []).forEach((row) => {
         const createdAt = new Date(row.created_at);
-        const amount = Number(row.advanceAmount);
+        const entry = {
+            advanceAmount: Number(row.advanceAmount),
+            productPrice: row.productPrice != null ? Number(row.productPrice) : null,
+            status: normalizeOrderStatus(row.status)
+        };
 
-        addToBucket(ranges.allTime, amount);
+        addToBucket(ranges.allTime, entry);
 
         if (createdAt >= startOfYear) {
-            addToBucket(ranges.year, amount);
+            addToBucket(ranges.year, entry);
         }
 
         if (createdAt >= startOfMonth) {
-            addToBucket(ranges.month, amount);
+            addToBucket(ranges.month, entry);
         }
 
         if (createdAt >= startOfWeek) {
-            addToBucket(ranges.week, amount);
+            addToBucket(ranges.week, entry);
         }
 
         if (createdAt >= startOfDay) {
-            addToBucket(ranges.today, amount);
+            addToBucket(ranges.today, entry);
         }
-
-        const status = normalizeOrderStatus(row.status);
-        statusBreakdown[status] += 1;
 
         if (row.receiptImage) {
             receipts.withReceipt += 1;
@@ -306,8 +366,8 @@ export async function getOrderStats() {
             year: roundBucket(ranges.year),
             allTime: roundBucket(ranges.allTime)
         },
-        statusBreakdown,
         receipts
     };
 }
+
 

@@ -16,6 +16,9 @@ create table if not exists public.wiz_order (
   "advanceAmount" numeric not null,
   "productImage" text,
   "receiptImage" text,
+  "productPrice" numeric,
+  "productSize" text,
+  "trackingId" text,
   status text not null default 'placed'
 );
 
@@ -29,16 +32,22 @@ alter table public.wiz_order
 alter table public.wiz_order
   add column if not exists status text not null default 'placed';
 
-update public.wiz_order
-  set status = 'placed'
-  where status is null;
+alter table public.wiz_order
+  add column if not exists "productPrice" numeric;
+
+alter table public.wiz_order
+  add column if not exists "productSize" text;
+
+alter table public.wiz_order
+  add column if not exists "trackingId" text;
+
 
 alter table public.wiz_order
   drop constraint if exists wiz_order_status_check;
 
 alter table public.wiz_order
   add constraint wiz_order_status_check
-  check (status in ('placed', 'created', 'delivered'));
+  check (status in ('pending', 'placed', 'created', 'dispatched', 'delivered', 'exchange'));
 
 create unique index if not exists wiz_order_order_id_key
   on public.wiz_order ("orderId");

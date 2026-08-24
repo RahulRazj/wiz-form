@@ -4,6 +4,14 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const MAX_PRODUCT_IMAGES = 5;
 const PRODUCT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const RECEIPT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+const ORDER_STATUS_OPTIONS = ["pending", "placed", "created", "dispatched", "delivered", "exchange"];
+const STATS_RANGE_OPTIONS = [
+  { key: "today", label: "Today" },
+  { key: "week", label: "This Week" },
+  { key: "month", label: "This Month" },
+  { key: "year", label: "This Year" },
+  { key: "allTime", label: "All Time", highlight: true }
+];
 
 function formatFileSize(bytes) {
   if (bytes < 1024 * 1024) {
@@ -77,6 +85,7 @@ const initialFormData = {
   address: "",
   city: "",
   advanceAmount: "",
+  productSize: "",
   terms: false
 };
 
@@ -100,6 +109,7 @@ export default function App() {
   const [adminToDate, setAdminToDate] = useState("");
   const [adminSearch, setAdminSearch] = useState("");
   const [adminReceiptFilter, setAdminReceiptFilter] = useState("all");
+  const [adminStatusFilter, setAdminStatusFilter] = useState("all");
   const [adminPagination, setAdminPagination] = useState({
     page: 1,
     limit: 20,
@@ -112,9 +122,16 @@ export default function App() {
   const [viewSubmission, setViewSubmission] = useState(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [statusUpdateError, setStatusUpdateError] = useState("");
+  const [orderPriceDraft, setOrderPriceDraft] = useState("");
+  const [orderStatusDraft, setOrderStatusDraft] = useState("");
   const [dashboardStats, setDashboardStats] = useState(null);
   const [dashboardStatsLoading, setDashboardStatsLoading] = useState(false);
   const [dashboardStatsError, setDashboardStatsError] = useState("");
+  const [selectedStatsRange, setSelectedStatsRange] = useState("today");
+  const [codSearchTerm, setCodSearchTerm] = useState("");
+  const [codSearchResults, setCodSearchResults] = useState(null);
+  const [codSearchLoading, setCodSearchLoading] = useState(false);
+  const [codSearchError, setCodSearchError] = useState("");
   const [adminToken, setAdminToken] = useState(() => {
     try {
       return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
@@ -325,6 +342,10 @@ export default function App() {
           query.set("hasReceipt", "false");
         }
 
+        if (adminStatusFilter !== "all") {
+          query.set("status", adminStatusFilter);
+        }
+
         const response = await fetch(`/api/submissions?${query.toString()}`, {
           headers: { "X-Admin-Token": adminToken },
           signal: controller.signal
@@ -366,7 +387,7 @@ export default function App() {
     return () => {
       controller.abort();
     };
-  }, [adminPage, adminLimit, adminFromDate, adminToDate, adminSearch, adminReceiptFilter, isAdminRoute, isAdminDashboardRoute, isAdminUnlocked, adminToken]);
+  }, [adminPage, adminLimit, adminFromDate, adminToDate, adminSearch, adminReceiptFilter, adminStatusFilter, isAdminRoute, isAdminDashboardRoute, isAdminUnlocked, adminToken]);
 
   useEffect(() => {
     if (!isAdminDashboardRoute || !isAdminUnlocked) {
@@ -416,12 +437,16 @@ export default function App() {
 
   function openSubmissionView(submission) {
     setStatusUpdateError("");
+    setOrderPriceDraft(submission.productPrice != null ? String(submission.productPrice) : "");
+    setOrderStatusDraft(submission.status || "placed");
     setViewSubmission(submission);
   }
 
   function closeSubmissionView() {
     setViewSubmission(null);
     setStatusUpdateError("");
+    setOrderPriceDraft("");
+    setOrderStatusDraft("");
   }
 
   function applySubmissionUpdate(updatedSubmission) {
@@ -435,7 +460,21 @@ export default function App() {
     );
   }
 
-  async function handleCreateOrder(submission) {
+  async function handleUpdateOrder(submission, status, productPrice, trackingId) {
+    const parsedPrice = Number(productPrice);
+
+    if (!status) {
+      setStatusUpdateError("Please select a status.");
+      return;
+    }
+
+    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+      setStatusUpdateError("Please enter a valid product price.");
+      return;
+    }
+
+    const trimmedTrackingId = (trackingId || "").trim();
+
     try {
       setIsUpdatingStatus(true);
       setStatusUpdateError("");
@@ -443,22 +482,61 @@ export default function App() {
       const response = await fetch(`/api/submissions/${submission.id}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
-        body: JSON.stringify({ status: "created" })
+        body: JSON.stringify({ status, productPrice: parsedPrice, trackingId: trimmedTrackingId })
       });
 
       const responseBody = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(responseBody.error || responseBody.message || "Failed to create the order.");
+        throw new Error(responseBody.error || responseBody.message || "Failed to update the order.");
       }
 
-      applySubmissionUpdate(responseBody.data || { ...submission, status: "created" });
+      applySubmissionUpdate(
+        responseBody.data || { ...submission, status, productPrice: parsedPrice, trackingId: trimmedTrackingId }
+      );
     } catch (error) {
       setStatusUpdateError(
-        error instanceof Error && error.message ? error.message : "Failed to create the order."
+        error instanceof Error && error.message ? error.message : "Failed to update the order."
       );
     } finally {
       setIsUpdatingStatus(false);
+    }
+  }
+
+  async function handleCodSearch(event) {
+    event.preventDefault();
+
+    const term = codSearchTerm.trim();
+
+    if (!term) {
+      setCodSearchResults(null);
+      setCodSearchError("");
+      return;
+    }
+
+    try {
+      setCodSearchLoading(true);
+      setCodSearchError("");
+
+      const query = new URLSearchParams({ search: term, limit: "100" });
+      const response = await fetch(`/api/submissions?${query.toString()}`, {
+        headers: { "X-Admin-Token": adminToken }
+      });
+
+      const responseBody = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(responseBody.error || responseBody.message || "Failed to search orders.");
+      }
+
+      setCodSearchResults(responseBody.data || []);
+    } catch (error) {
+      setCodSearchResults(null);
+      setCodSearchError(
+        error instanceof Error && error.message ? error.message : "Failed to search orders."
+      );
+    } finally {
+      setCodSearchLoading(false);
     }
   }
 
@@ -655,6 +733,10 @@ export default function App() {
     payload.append("address", formData.address.trim());
     payload.append("city", formData.city.trim());
     payload.append("advanceAmount", formData.advanceAmount.trim());
+
+    if (formData.productSize.trim()) {
+      payload.append("productSize", formData.productSize.trim());
+    }
     payload.append("terms", "true");
 
     productImagesRef.current.forEach((entry) => {
@@ -765,7 +847,7 @@ export default function App() {
         <button type="button" className={`secondary-button ${isAdminHomeRoute ? "active" : ""}`} onClick={() => goToAdminRoute("/admin")}>Overview</button>
         <button type="button" className={`secondary-button ${isAdminDashboardRoute ? "active" : ""}`} onClick={() => goToAdminRoute("/admin/dashboard")}>Dashboard</button>
         <button type="button" className={`secondary-button ${isAdminManageRoute ? "active" : ""}`} onClick={() => goToAdminRoute("/admin/manage")}>Manage</button>
-        <button type="button" className="secondary-button" onClick={handleAdminLock}>Lock</button>
+        <button type="button" className="secondary-button admin-nav-lock" onClick={handleAdminLock}>Lock</button>
       </div>
 
       {isAdminDashboardRoute ? (
@@ -773,7 +855,6 @@ export default function App() {
           <div className="dashboard-header">
             <div>
               <h2>Dashboard</h2>
-              <p>Order volume and revenue at a glance, from GET /api/submissions/stats.</p>
             </div>
           </div>
 
@@ -784,52 +865,69 @@ export default function App() {
           ) : dashboardStats ? (
             <>
               <div className="stats-grid">
-                <div className="stats-card">
-                  <span className="stats-card-label">Today</span>
-                  <strong className="stats-card-value">{dashboardStats.ranges.today.count}</strong>
-                  <span className="stats-card-sub">{formatCurrency(dashboardStats.ranges.today.totalAmount)}</span>
-                </div>
+                {STATS_RANGE_OPTIONS.map((option) => (
+                  <button
+                    type="button"
+                    key={option.key}
+                    className={`stats-card ${option.highlight ? "stats-card-highlight" : ""} ${
+                      selectedStatsRange === option.key ? "stats-card-selected" : ""
+                    }`}
+                    onClick={() => setSelectedStatsRange(option.key)}
+                  >
+                    <span className="stats-card-label">{option.label}</span>
+                    <strong className="stats-card-value">{dashboardStats.ranges[option.key].count}</strong>
+                    <span className="stats-card-sub">
+                      {formatCurrency(dashboardStats.ranges[option.key].advanceReceived)}
+                    </span>
+                  </button>
+                ))}
+              </div>
 
-                <div className="stats-card">
-                  <span className="stats-card-label">This Week</span>
-                  <strong className="stats-card-value">{dashboardStats.ranges.week.count}</strong>
-                  <span className="stats-card-sub">{formatCurrency(dashboardStats.ranges.week.totalAmount)}</span>
+              <div className="stats-overview-row">
+                <div className="stats-overview-item">
+                  <span>Total Sales</span>
+                  <strong>{formatCurrency(dashboardStats.ranges[selectedStatsRange].totalSales)}</strong>
                 </div>
-
-                <div className="stats-card">
-                  <span className="stats-card-label">This Month</span>
-                  <strong className="stats-card-value">{dashboardStats.ranges.month.count}</strong>
-                  <span className="stats-card-sub">{formatCurrency(dashboardStats.ranges.month.totalAmount)}</span>
+                <div className="stats-overview-item">
+                  <span>Advance Received</span>
+                  <strong>{formatCurrency(dashboardStats.ranges[selectedStatsRange].advanceReceived)}</strong>
                 </div>
-
-                <div className="stats-card">
-                  <span className="stats-card-label">This Year</span>
-                  <strong className="stats-card-value">{dashboardStats.ranges.year.count}</strong>
-                  <span className="stats-card-sub">{formatCurrency(dashboardStats.ranges.year.totalAmount)}</span>
-                </div>
-
-                <div className="stats-card stats-card-highlight">
-                  <span className="stats-card-label">All Time</span>
-                  <strong className="stats-card-value">{dashboardStats.ranges.allTime.count}</strong>
-                  <span className="stats-card-sub">{formatCurrency(dashboardStats.ranges.allTime.totalAmount)}</span>
+                <div className="stats-overview-item">
+                  <span>Pending COD</span>
+                  <strong>{formatCurrency(dashboardStats.ranges[selectedStatsRange].pendingCod)}</strong>
                 </div>
               </div>
 
               <div className="stats-secondary-grid">
                 <div className="stats-breakdown-card">
-                  <span className="submission-inspector-section-title">Order Status</span>
+                  <span className="submission-inspector-section-title">
+                    Order Status ·{" "}
+                    {STATS_RANGE_OPTIONS.find((option) => option.key === selectedStatsRange)?.label}
+                  </span>
 
                   <div className="stats-breakdown-row">
+                    <span className="status-pill status-pill-pending">PENDING</span>
+                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.pending}</strong>
+                  </div>
+                  <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-placed">PLACED</span>
-                    <strong>{dashboardStats.statusBreakdown.placed}</strong>
+                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.placed}</strong>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-created">CREATED</span>
-                    <strong>{dashboardStats.statusBreakdown.created}</strong>
+                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.created}</strong>
+                  </div>
+                  <div className="stats-breakdown-row">
+                    <span className="status-pill status-pill-dispatched">DISPATCHED</span>
+                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.dispatched}</strong>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-delivered">DELIVERED</span>
-                    <strong>{dashboardStats.statusBreakdown.delivered}</strong>
+                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.delivered}</strong>
+                  </div>
+                  <div className="stats-breakdown-row">
+                    <span className="status-pill status-pill-exchange">EXCHANGE</span>
+                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.exchange}</strong>
                   </div>
                 </div>
 
@@ -846,6 +944,82 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              <div className="stats-cod-card">
+                <div className="stats-cod-header">
+                  <div>
+                    <span className="submission-inspector-section-title">Remaining COD (Cash on Delivery)</span>
+                    <p className="dashboard-header-hint">
+                      Total dues still owed across {dashboardStats.ranges.allTime.pricedCount} priced order
+                      {dashboardStats.ranges.allTime.pricedCount === 1 ? "" : "s"}.
+                    </p>
+                  </div>
+                  <strong className="stats-cod-total">
+                    {formatCurrency(dashboardStats.ranges.allTime.pendingCod)}
+                  </strong>
+                </div>
+
+                <form className="stats-cod-search" onSubmit={handleCodSearch}>
+                  <input
+                    type="search"
+                    placeholder="Search a customer by name or phone..."
+                    value={codSearchTerm}
+                    onChange={(event) => setCodSearchTerm(event.target.value)}
+                  />
+                  <button type="submit" className="secondary-button compact-button" disabled={codSearchLoading}>
+                    {codSearchLoading ? "Searching..." : "Search"}
+                  </button>
+                </form>
+
+                {codSearchError ? (
+                  <p className="dashboard-state dashboard-state-error">{codSearchError}</p>
+                ) : codSearchResults ? (
+                  codSearchResults.length > 0 ? (
+                    <>
+                      <div className="dashboard-table-wrap">
+                        <table className="stats-cod-table">
+                          <thead>
+                            <tr>
+                              <th>Order</th>
+                              <th>Customer</th>
+                              <th>Price</th>
+                              <th>Advance Paid</th>
+                              <th>Remaining</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {codSearchResults.map((submission) => (
+                              <tr key={submission.id}>
+                                <td>{submission.orderId || "—"}</td>
+                                <td>{submission.name || "—"}</td>
+                                <td>{submission.productPrice != null ? formatCurrency(submission.productPrice) : "—"}</td>
+                                <td>{formatCurrency(submission.advanceAmount)}</td>
+                                <td>
+                                  {submission.remainingCod != null ? formatCurrency(submission.remainingCod) : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <p className="stats-cod-search-total">
+                        Total remaining for this search:{" "}
+                        <strong>
+                          {formatCurrency(
+                            codSearchResults.reduce(
+                              (sum, submission) => sum + (submission.remainingCod || 0),
+                              0
+                            )
+                          )}
+                        </strong>
+                      </p>
+                    </>
+                  ) : (
+                    <p className="dashboard-state">No matching orders found.</p>
+                  )
+                ) : null}
+              </div>
             </>
           ) : (
             <p className="dashboard-state">No statistics available.</p>
@@ -855,8 +1029,7 @@ export default function App() {
         <section className="dashboard-card">
           <div className="dashboard-header">
             <div>
-              <h2>{isAdminManageRoute ? "Manage Queue" : "Order Submissions"}</h2>
-            <p>Live data from GET /api/submissions with server-side search and filters.</p>
+              <h2>{isAdminManageRoute ? "Manage Orders" : "Order Submissions"}</h2>
           </div>
 
           <div className="dashboard-summary">
@@ -879,7 +1052,7 @@ export default function App() {
 
         <div className="dashboard-filters">
           <div className="dashboard-filters-row dashboard-filters-row-search">
-            <label className="dashboard-search-field">
+            <label className="dashboard-search-field dashboard-search-field-compact">
               <span>Search</span>
               <input
                 type="search"
@@ -890,6 +1063,39 @@ export default function App() {
                   setAdminSearch(event.target.value);
                 }}
               />
+            </label>
+
+            <label>
+              <span>Receipt</span>
+              <select
+                value={adminReceiptFilter}
+                onChange={(event) => {
+                  setAdminPage(1);
+                  setAdminReceiptFilter(event.target.value);
+                }}
+              >
+                <option value="all">All</option>
+                <option value="with-receipt">With receipt</option>
+                <option value="without-receipt">Without receipt</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Status</span>
+              <select
+                value={adminStatusFilter}
+                onChange={(event) => {
+                  setAdminPage(1);
+                  setAdminStatusFilter(event.target.value);
+                }}
+              >
+                <option value="all">All</option>
+                {ORDER_STATUS_OPTIONS.map((status) => (
+                  <option key={status} value={status}>
+                    {status.charAt(0).toUpperCase() + status.slice(1)}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
 
@@ -916,21 +1122,6 @@ export default function App() {
                   setAdminToDate(event.target.value);
                 }}
               />
-            </label>
-
-            <label>
-              <span>Receipt</span>
-              <select
-                value={adminReceiptFilter}
-                onChange={(event) => {
-                  setAdminPage(1);
-                  setAdminReceiptFilter(event.target.value);
-                }}
-              >
-                <option value="all">All</option>
-                <option value="with-receipt">With receipt</option>
-                <option value="without-receipt">Without receipt</option>
-              </select>
             </label>
 
             <label>
@@ -1023,7 +1214,7 @@ export default function App() {
                 <tr>
                   <th>Customer</th>
                   <th>Location</th>
-                  <th>Advance</th>
+                  <th>Advance Paid</th>
                   <th>Images</th>
                   <th>Receipt</th>
                   <th>Status</th>
@@ -1121,7 +1312,7 @@ export default function App() {
                   <strong>{selectedSubmission.phone || "—"}</strong>
                 </div>
                 <div>
-                  <span>Advance</span>
+                  <span>Advance Paid</span>
                   <strong>{formatCurrency(selectedSubmission.advanceAmount)}</strong>
                 </div>
                 <div>
@@ -1260,9 +1451,33 @@ export default function App() {
                   <strong>{viewSubmission.city || "—"}</strong>
                 </div>
                 <div>
-                  <span>Advance</span>
+                  <span>Advance Paid</span>
                   <strong>{formatCurrency(viewSubmission.advanceAmount)}</strong>
                 </div>
+                {viewSubmission.productSize ? (
+                  <div>
+                    <span>Size</span>
+                    <strong>{viewSubmission.productSize}</strong>
+                  </div>
+                ) : null}
+                {viewSubmission.trackingId ? (
+                  <div>
+                    <span>Tracking ID</span>
+                    <strong>{viewSubmission.trackingId}</strong>
+                  </div>
+                ) : null}
+                {viewSubmission.productPrice != null ? (
+                  <>
+                    <div>
+                      <span>Price</span>
+                      <strong>{formatCurrency(viewSubmission.productPrice)}</strong>
+                    </div>
+                    <div>
+                      <span>Remaining COD</span>
+                      <strong>{formatCurrency(viewSubmission.remainingCod)}</strong>
+                    </div>
+                  </>
+                ) : null}
               </div>
 
               <p className="submission-address">{viewSubmission.address || "No address provided."}</p>
@@ -1315,20 +1530,46 @@ export default function App() {
             </div>
 
             <div className="submission-detail-modal-actions">
-              {viewSubmission.status === "placed" ? (
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={isUpdatingStatus}
-                  onClick={() => handleCreateOrder(viewSubmission)}
+              <label className="submission-status-field">
+                <span>Status</span>
+                <select
+                  value={orderStatusDraft}
+                  onChange={(event) => setOrderStatusDraft(event.target.value)}
                 >
-                  {isUpdatingStatus ? "Creating order..." : "Create Order"}
-                </button>
-              ) : (
-                <span className="dashboard-empty-cell">
-                  Order already {viewSubmission.status === "delivered" ? "delivered" : "created"}.
-                </span>
-              )}
+                  <option value="" disabled>Select status</option>
+                  {ORDER_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {status.charAt(0).toUpperCase() + status.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="submission-price-field">
+                <span>Product Price</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Enter product price"
+                  value={orderPriceDraft}
+                  onChange={(event) => setOrderPriceDraft(event.target.value)}
+                />
+              </label>
+
+              <button
+                type="button"
+                className="primary-button"
+                disabled={
+                  isUpdatingStatus ||
+                  !orderStatusDraft ||
+                  !Number.isFinite(Number(orderPriceDraft)) ||
+                  Number(orderPriceDraft) <= 0
+                }
+                onClick={() => handleUpdateOrder(viewSubmission, orderStatusDraft, orderPriceDraft)}
+              >
+                {isUpdatingStatus ? "Saving..." : "Save"}
+              </button>
             </div>
           </div>
         </div>
@@ -1486,6 +1727,18 @@ export default function App() {
             </div>
 
             <small className="error">{errors.productImage}</small>
+          </div>
+
+          <div className="field">
+            <label htmlFor="productSize">Product Size</label>
+            <input
+              type="text"
+              id="productSize"
+              name="productSize"
+              placeholder="e.g. M, L, XL, 42"
+              value={formData.productSize}
+              onChange={(event) => updateField("productSize", event.target.value)}
+            />
           </div>
         </section>
 
