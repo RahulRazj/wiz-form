@@ -51,7 +51,6 @@ async function startServer() {
     await Promise.all(SUPABASE_BUCKETS.map((bucketName) => ensureStorageBucketIsPublic(bucketName)));
 
     app.listen(PORT, () => {
-        console.log(`Server running on http://localhost:${PORT}`);
         startImageCleanupTimer();
     });
 }
