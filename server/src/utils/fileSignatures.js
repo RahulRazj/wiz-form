@@ -17,50 +17,42 @@ export function isPdfBuffer(buffer) {
     return buffer?.length >= 5 && buffer.slice(0, 5).toString("ascii") === "%PDF-";
 }
 
-export function validateFileSignature(file, fieldName) {
+// AVIF/HEIF images use an ISOBMFF container: a size word, then "ftyp", then a brand code.
+export function isAvifBuffer(buffer) {
+    return buffer?.length >= 12
+        && buffer.slice(4, 8).toString("ascii") === "ftyp"
+        && ["avif", "avis"].includes(buffer.slice(8, 12).toString("ascii"));
+}
+
+const SIGNATURE_DETECTORS = [
+    { mimetype: "image/jpeg", test: isJpegBuffer },
+    { mimetype: "image/png", test: isPngBuffer },
+    { mimetype: "image/webp", test: isWebpBuffer },
+    { mimetype: "image/avif", test: isAvifBuffer },
+    { mimetype: "application/pdf", test: isPdfBuffer }
+];
+
+// Detects the real file type from its bytes, ignoring whatever mimetype the client declared.
+export function detectFileMimetype(buffer) {
+    const match = SIGNATURE_DETECTORS.find((detector) => detector.test(buffer));
+    return match ? match.mimetype : null;
+}
+
+export function validateFileSignature(file, fieldName, allowedTypes) {
     if (!file?.buffer?.length) {
         const error = new Error(`Missing file data for ${fieldName}.`);
         error.statusCode = 400;
         throw error;
     }
 
-    const buffer = file.buffer;
+    const detectedType = detectFileMimetype(file.buffer);
 
-    if (fieldName === "receiptImage") {
-        if (file.mimetype === "application/pdf" && isPdfBuffer(buffer)) {
-            return;
-        }
-
-        if (file.mimetype === "image/jpeg" && isJpegBuffer(buffer)) {
-            return;
-        }
-
-        if (file.mimetype === "image/png" && isPngBuffer(buffer)) {
-            return;
-        }
-
-        if (file.mimetype === "image/webp" && isWebpBuffer(buffer)) {
-            return;
-        }
-
+    if (!detectedType || !allowedTypes.includes(detectedType)) {
         const error = new Error(`Unsupported file contents for ${fieldName}.`);
         error.statusCode = 400;
         throw error;
     }
 
-    if (file.mimetype === "image/jpeg" && isJpegBuffer(buffer)) {
-        return;
-    }
-
-    if (file.mimetype === "image/png" && isPngBuffer(buffer)) {
-        return;
-    }
-
-    if (file.mimetype === "image/webp" && isWebpBuffer(buffer)) {
-        return;
-    }
-
-    const error = new Error(`Unsupported file contents for ${fieldName}.`);
-    error.statusCode = 400;
-    throw error;
+    // Trust the sniffed type over the client-declared mimetype for downstream storage/content-type.
+    file.mimetype = detectedType;
 }

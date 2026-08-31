@@ -231,6 +231,45 @@ export async function listSubmissionProductImageUrls(productImageValue) {
     return fallbackUrl ? [fallbackUrl] : [];
 }
 
+// Removes every file under a submission's storage folder (all product images + receipt).
+export async function removeSubmissionImageFiles(submission) {
+    const referenceValue = submission?.productImage || submission?.receiptImage;
+    const location = extractStorageLocation(referenceValue);
+
+    if (!location) {
+        return;
+    }
+
+    const folderPath = path.posix.dirname(location.path);
+    const storageFolder = folderPath === "." ? "" : folderPath;
+    const bucketCandidates = [...new Set([location.bucket, ...SUPABASE_BUCKETS])];
+
+    for (const bucketName of bucketCandidates) {
+        const { data, error } = await supabase.storage.from(bucketName).list(storageFolder, { limit: 100 });
+
+        if (error) {
+            if (String(error.message || "").toLowerCase().includes("bucket not found")) {
+                continue;
+            }
+
+            throw new Error(error.message);
+        }
+
+        if (!data || data.length === 0) {
+            continue;
+        }
+
+        const filePaths = data.map((file) => (storageFolder ? `${storageFolder}/${file.name}` : file.name));
+        const { error: removeError } = await supabase.storage.from(bucketName).remove(filePaths);
+
+        if (removeError) {
+            throw new Error(removeError.message);
+        }
+
+        return;
+    }
+}
+
 export async function downloadStorageObject(location) {
     let lastError = null;
 

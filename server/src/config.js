@@ -38,8 +38,23 @@ export const DEFAULT_ORDER_STATUS = "pending";
 export const ADMIN_SECRET_TOKEN = process.env.ADMIN_SECRET_TOKEN || "";
 export const COURIER_WEBHOOK_SECRET = process.env.COURIER_WEBHOOK_SECRET || "";
 
+// NCM courier API used to create shipments for dispatched orders.
+export const NCM_API_BASE_URL = process.env.NCM_API_URL || "";
+export const NCM_API_KEY = process.env.NCM_API_KEY || "";
+export const NCM_API_TIMEOUT_MS = Number(process.env.NCM_API_TIMEOUT_MS || 10000);
+export const NCM_WEBHOOK_SECRET = process.env.NCM_WEBHOOK_SECRET || "";
+
+// API Endpoints
+export const NCM_CREATE_ORDER_PATH = process.env.NCM_CREATE_ORDER_PATH;
+export const NCM_BRANCH_LIST = process.env.NCM_BRANCH_LIST;
+
 export const SUBMISSION_RATE_WINDOW_MS = 15 * 60 * 1000;
 export const SUBMISSION_RATE_LIMIT = 12;
+
+// Background job that deletes order images from Supabase storage once they're older
+// than this many days. 0 (default) keeps the feature disabled.
+export const IMAGE_CLEANUP_RETENTION_DAYS = Number(process.env.IMAGE_CLEANUP_RETENTION_DAYS || 0);
+export const IMAGE_CLEANUP_INTERVAL_DAYS = Number(process.env.IMAGE_CLEANUP_INTERVAL_DAYS || 1);
 
 export const ALLOWED_SUBMISSION_FIELDS = new Set([
     "name",

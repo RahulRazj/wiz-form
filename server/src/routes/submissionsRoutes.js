@@ -16,7 +16,8 @@ import {
     listSubmissions,
     getSubmissionByReference,
     updateSubmissionStatus,
-    updateTrackingId,
+    handleNCMWebhookEvent,
+    createShipmentForOrder,
     getOrderStats
 } from "../services/submissionService.js";
 
@@ -50,13 +51,13 @@ router.post(
 
             validateFileCollection(
                 productImages,
-                ["image/jpeg", "image/png", "image/webp"],
+                ["image/jpeg", "image/png", "image/webp", "image/avif"],
                 "productImage",
                 { minCount: 1, maxCount: MAX_PRODUCT_IMAGES }
             );
             validateFile(
                 receiptImage,
-                ["image/jpeg", "image/png", "image/webp", "application/pdf"],
+                ["image/jpeg", "image/png", "image/webp", "image/avif", "application/pdf"],
                 "receiptImage"
             );
 
@@ -136,17 +137,16 @@ router.get("/stats", requireAdminToken, async (req, res, next) => {
     }
 });
 
-// Called by the courier service once a shipment is created; not admin-facing.
-router.patch("/tracking", requireCourierWebhookToken, async (req, res, next) => {
+// Triggers shipment creation with the third-party courier API for an existing order.
+router.post("/:id/create-shipment", requireAdminToken, async (req, res, next) => {
     try {
-        const orderId = normalizeText(req.body?.orderId);
-        const trackingId = normalizeText(req.body?.trackingId);
+        const id = Number.parseInt(req.params.id, 10);
 
-        if (!orderId || !trackingId) {
-            return res.status(400).json({ error: "orderId and trackingId are required." });
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({ error: "A valid submission id is required." });
         }
 
-        const enrichedSubmission = await updateTrackingId(orderId, trackingId);
+        const enrichedSubmission = await createShipmentForOrder(id);
 
         if (!enrichedSubmission) {
             return res.status(404).json({ error: "Submission not found." });
@@ -157,6 +157,7 @@ router.patch("/tracking", requireCourierWebhookToken, async (req, res, next) => 
         next(error);
     }
 });
+
 
 router.get("/:submissionReference", requireAdminToken, async (req, res, next) => {
     try {
@@ -176,6 +177,17 @@ router.get("/:submissionReference", requireAdminToken, async (req, res, next) =>
     } catch (error) {
         next(error);
     }
+});
+
+router.post("/ncm/webhook", async (req, res) =>{
+    const { order_id,order_ids,event,timestamp,status } = req.body;
+
+    const ids = order_ids ?? [order_id];
+
+    // Always acknowledge NCM quickly
+    res.sendStatus(200);
+
+    await handleNCMWebhookEvent({ orderIds: ids, event, status, timestamp });
 });
 
 export default router;

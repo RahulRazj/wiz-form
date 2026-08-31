@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const MAX_PRODUCT_IMAGES = 5;
-const PRODUCT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const RECEIPT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+const PRODUCT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/avif"];
+const RECEIPT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/avif", "application/pdf"];
 const ORDER_STATUS_OPTIONS = ["pending", "placed", "created", "dispatched", "delivered", "exchange"];
 const STATS_RANGE_OPTIONS = [
   { key: "today", label: "Today" },
@@ -99,6 +99,9 @@ export default function App() {
   const [receiptImage, setReceiptImage] = useState(null);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [orderId, setOrderId] = useState("");
+  const [branches, setBranches] = useState([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchesError, setBranchesError] = useState("");
 
   const [submissions, setSubmissions] = useState([]);
   const [adminLoading, setAdminLoading] = useState(false);
@@ -124,6 +127,9 @@ export default function App() {
   const [statusUpdateError, setStatusUpdateError] = useState("");
   const [orderPriceDraft, setOrderPriceDraft] = useState("");
   const [orderStatusDraft, setOrderStatusDraft] = useState("");
+  const [isCleaningUpImages, setIsCleaningUpImages] = useState(false);
+  const [cleanupMessage, setCleanupMessage] = useState("");
+  const [cleanupError, setCleanupError] = useState("");
   const [dashboardStats, setDashboardStats] = useState(null);
   const [dashboardStatsLoading, setDashboardStatsLoading] = useState(false);
   const [dashboardStatsError, setDashboardStatsError] = useState("");
@@ -197,6 +203,46 @@ export default function App() {
     window.history.replaceState({}, "", "/admin/dashboard");
     setPathname("/admin/dashboard");
   }, [isLegacyDashboardRoute]);
+
+  useEffect(() => {
+    if (isAdminRoute) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+
+    async function loadBranches() {
+      try {
+        setBranchesLoading(true);
+        setBranchesError("");
+
+        const response = await fetch("/api/branches", { signal: controller.signal });
+        const responseBody = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(responseBody.error || responseBody.message || "Failed to load cities.");
+        }
+
+        setBranches(Array.isArray(responseBody.data) ? responseBody.data : []);
+      } catch (error) {
+        if (error.name === "AbortError") {
+          return;
+        }
+
+        setBranchesError(
+          error instanceof Error && error.message ? error.message : "Failed to load cities."
+        );
+      } finally {
+        setBranchesLoading(false);
+      }
+    }
+
+    loadBranches();
+
+    return () => {
+      controller.abort();
+    };
+  }, [isAdminRoute]);
 
   function navigate(to) {
     if (window.location.pathname !== to) {
@@ -373,9 +419,7 @@ export default function App() {
         }
 
         setAdminError(
-          error instanceof Error && error.message
-            ? error.message
-            : "Failed to load submissions."
+          error instanceof Error && error.message ? error.message : "Failed to load submissions."
         );
       } finally {
         setAdminLoading(false);
@@ -419,9 +463,7 @@ export default function App() {
         }
 
         setDashboardStatsError(
-          error instanceof Error && error.message
-            ? error.message
-            : "Failed to load statistics."
+          error instanceof Error && error.message ? error.message : "Failed to load statistics."
         );
       } finally {
         setDashboardStatsLoading(false);
@@ -540,6 +582,47 @@ export default function App() {
     }
   }
 
+  async function handleCleanupImages() {
+    const confirmed = window.confirm(
+      "This permanently deletes stored images for older orders. Continue?"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setIsCleaningUpImages(true);
+      setCleanupMessage("");
+      setCleanupError("");
+
+      const response = await fetch("/api/admin/cleanup-images", {
+        method: "POST",
+        headers: { "X-Admin-Token": adminToken }
+      });
+
+      const responseBody = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(responseBody.error || responseBody.message || "Failed to run image cleanup.");
+      }
+
+      const result = responseBody.data || {};
+
+      setCleanupMessage(
+        result.skipped
+          ? "Image cleanup is disabled. Set IMAGE_CLEANUP_RETENTION_DAYS on the server to enable it."
+          : `Cleanup complete: ${result.cleanedCount} order(s) cleaned, ${result.failedCount} failed.`
+      );
+    } catch (error) {
+      setCleanupError(
+        error instanceof Error && error.message ? error.message : "Failed to run image cleanup."
+      );
+    } finally {
+      setIsCleaningUpImages(false);
+    }
+  }
+
   function updateField(name, value) {
     setFormData((current) => ({
       ...current,
@@ -559,22 +642,23 @@ export default function App() {
 
   function validateRequiredFields() {
     const nextErrors = {};
+    const advanceAmountText = formData.advanceAmount.trim();
 
     if (!formData.name.trim()) nextErrors.name = "This field is required.";
     if (!formData.phone.trim()) nextErrors.phone = "This field is required.";
     if (!formData.address.trim()) nextErrors.address = "This field is required.";
     if (!formData.city.trim()) nextErrors.city = "This field is required.";
-    if (!formData.advanceAmount.trim()) nextErrors.advanceAmount = "This field is required.";
+    if (!advanceAmountText) {
+      nextErrors.advanceAmount = "This field is required.";
+    } else if (!/^\d+$/.test(advanceAmountText) || Number.parseInt(advanceAmountText, 10) <= 0) {
+      nextErrors.advanceAmount = "Enter a valid integer advance amount.";
+    }
 
     if (formData.phone.trim()) {
       const phone = formData.phone.replace(/\D/g, "");
       if (!/^[6-9]\d{9}$/.test(phone)) {
         nextErrors.phone = "Enter a valid 10-digit phone number.";
       }
-    }
-
-    if (formData.advanceAmount.trim() && Number(formData.advanceAmount) <= 0) {
-      nextErrors.advanceAmount = "Enter a valid advance amount.";
     }
 
     if (productImagesRef.current.length === 0) {
@@ -1030,6 +1114,20 @@ export default function App() {
           <div className="dashboard-header">
             <div>
               <h2>{isAdminManageRoute ? "Manage Orders" : "Order Submissions"}</h2>
+              {isAdminManageRoute ? (
+                <div className="manage-cleanup">
+                  <button
+                    type="button"
+                    className="secondary-button compact-button"
+                    onClick={handleCleanupImages}
+                    disabled={isCleaningUpImages}
+                  >
+                    {isCleaningUpImages ? "Cleaning up..." : "Cleanup Images"}
+                  </button>
+                  {cleanupMessage ? <p className="dashboard-state">{cleanupMessage}</p> : null}
+                  {cleanupError ? <p className="dashboard-state dashboard-state-error">{cleanupError}</p> : null}
+                </div>
+              ) : null}
           </div>
 
           <div className="dashboard-summary">
@@ -1051,7 +1149,7 @@ export default function App() {
         </div>
 
         <div className="dashboard-filters">
-          <div className="dashboard-filters-row dashboard-filters-row-search">
+          <div className="dashboard-filters-row dashboard-filters-row-single">
             <label className="dashboard-search-field dashboard-search-field-compact">
               <span>Search</span>
               <input
@@ -1097,13 +1195,11 @@ export default function App() {
                 ))}
               </select>
             </label>
-          </div>
 
-          <div className="dashboard-filters-row">
             <label>
               <span>From</span>
               <input
-                type="datetime-local"
+                type="date"
                 value={adminFromDate}
                 onChange={(event) => {
                   setAdminPage(1);
@@ -1115,7 +1211,7 @@ export default function App() {
             <label>
               <span>To</span>
               <input
-                type="datetime-local"
+                type="date"
                 value={adminToDate}
                 onChange={(event) => {
                   setAdminPage(1);
@@ -1648,13 +1744,13 @@ export default function App() {
           <div className="address-row">
             <div className={`field ${errors.city ? "invalid" : ""}`}>
               <label htmlFor="city">City <span>*</span></label>
-              <input
-                type="text"
+              <CityCombobox
                 id="city"
-                name="city"
-                placeholder="City"
                 value={formData.city}
-                onChange={(event) => updateField("city", event.target.value)}
+                onChange={(value) => updateField("city", value)}
+                options={branches}
+                loading={branchesLoading}
+                error={branchesError}
               />
               <small className="error">{errors.city}</small>
             </div>
@@ -1688,7 +1784,7 @@ export default function App() {
                 type="file"
                 id="productImage"
                 name="productImage"
-                accept="image/jpeg,image/png,image/webp"
+                accept="image/jpeg,image/png,image/webp,image/avif"
                 multiple
                 hidden
                 onChange={(event) => handleProductFiles(event.target.files)}
@@ -1756,14 +1852,14 @@ export default function App() {
             <div className="amount-input">
               <span>₹</span>
               <input
-                type="number"
+                type="text"
                 id="advanceAmount"
                 name="advanceAmount"
                 placeholder="0"
-                min="1"
-                step="0.01"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 value={formData.advanceAmount}
-                onChange={(event) => updateField("advanceAmount", event.target.value)}
+                onChange={(event) => updateField("advanceAmount", event.target.value.replace(/\D/g, ""))}
               />
             </div>
             <small className="error">{errors.advanceAmount}</small>
@@ -1787,7 +1883,7 @@ export default function App() {
                 type="file"
                 id="receiptImage"
                 name="receiptImage"
-                accept="image/jpeg,image/png,image/webp,application/pdf"
+                accept="image/jpeg,image/png,image/webp,image/avif,application/pdf"
                 hidden
                 onChange={(event) => handleReceiptFile(event.target.files?.[0])}
               />
@@ -1898,5 +1994,126 @@ export default function App() {
         <p>Wizzzey. Simple, secure, and reliable order submissions.</p>
       </footer>
     </main>
+  );
+}
+
+// Searchable dropdown for selecting a delivery city from the NCM branch list.
+function CityCombobox({ id, value, onChange, options, loading, error }) {
+  const [query, setQuery] = useState(value || "");
+  const [isOpen, setIsOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    setQuery(value || "");
+  }, [value]);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        setIsOpen(false);
+        setQuery(value || "");
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [value]);
+
+  const filteredOptions = query.trim()
+    ? options.filter((option) => option.name.toLowerCase().includes(query.trim().toLowerCase()))
+    : options;
+
+  function selectOption(option) {
+    onChange(option.name);
+    setQuery(option.name);
+    setIsOpen(false);
+  }
+
+  function handleBlur() {
+    // Give click-on-option a chance to run before we validate the typed text.
+    setTimeout(() => {
+      const exactMatch = options.find(
+        (option) => option.name.toLowerCase() === query.trim().toLowerCase()
+      );
+
+      if (exactMatch) {
+        onChange(exactMatch.name);
+        setQuery(exactMatch.name);
+      } else {
+        onChange("");
+        setQuery("");
+      }
+
+      setIsOpen(false);
+    }, 150);
+  }
+
+  function handleKeyDown(event) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setIsOpen(true);
+      setHighlightedIndex((current) => Math.min(current + 1, filteredOptions.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedIndex((current) => Math.max(current - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const option = filteredOptions[highlightedIndex];
+      if (option) {
+        selectOption(option);
+      }
+    } else if (event.key === "Escape") {
+      setIsOpen(false);
+    }
+  }
+
+  return (
+    <div className="combobox" ref={containerRef}>
+      <input
+        type="text"
+        id={id}
+        name={id}
+        autoComplete="off"
+        placeholder={loading ? "Loading cities..." : "Search for a city..."}
+        value={query}
+        disabled={loading}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setHighlightedIndex(0);
+          setIsOpen(true);
+        }}
+        onFocus={() => setIsOpen(true)}
+        onKeyDown={handleKeyDown}
+        onBlur={handleBlur}
+      />
+
+      {isOpen && !loading ? (
+        <ul className="combobox-list">
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((option, index) => (
+              <li key={option.code || option.name}>
+                <button
+                  type="button"
+                  className={`combobox-option ${index === highlightedIndex ? "highlighted" : ""}`}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectOption(option)}
+                  onMouseEnter={() => setHighlightedIndex(index)}
+                >
+                  <span className="combobox-option-name">{option.name}</span>
+                  {option.district ? (
+                    <span className="combobox-option-meta">{option.district}</span>
+                  ) : null}
+                </button>
+              </li>
+            ))
+          ) : (
+            <li className="combobox-empty">No matching cities.</li>
+          )}
+        </ul>
+      ) : null}
+
+      {error ? <small className="error">{error}</small> : null}
+    </div>
   );
 }

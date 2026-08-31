@@ -28,9 +28,16 @@ export function validateRequiredFields(body) {
         throw error;
     }
 
-    const amount = Number(body.advanceAmount);
+    const amountText = normalizeText(body.advanceAmount);
+    if (!/^\d+$/.test(amountText)) {
+        const error = new Error("Enter a valid integer advance amount.");
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const amount = Number.parseInt(amountText, 10);
     if (!Number.isFinite(amount) || amount <= 0) {
-        const error = new Error("Enter a valid advance amount.");
+        const error = new Error("Enter a valid integer advance amount.");
         error.statusCode = 400;
         throw error;
     }
@@ -64,13 +71,7 @@ export function validateFile(file, allowedTypes, fieldName) {
         return;
     }
 
-    if (!allowedTypes.includes(file.mimetype)) {
-        const error = new Error(`Unsupported file type for ${fieldName}.`);
-        error.statusCode = 400;
-        throw error;
-    }
-
-    validateFileSignature(file, fieldName);
+    validateFileSignature(file, fieldName, allowedTypes);
 }
 
 export function validateFileCollection(files, allowedTypes, fieldName, options = {}) {

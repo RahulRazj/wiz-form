@@ -13,6 +13,7 @@ import {
     getStoragePublicUrl,
     listSubmissionProductImageUrls
 } from "./storageService.js";
+import { createCourierShipment } from "./trackingService.js";
 
 export function generateSubmissionReference() {
     return `ORD-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -199,11 +200,46 @@ export async function getSubmissionByReference(submissionReference) {
     return enrichSubmission(data);
 }
 
+// Moving pending -> placed must create the courier shipment first; the status only
+// changes once that call succeeds, so a failed shipment never leaves an order "placed".
 export async function updateSubmissionStatus(id, status, productPrice) {
+    const { data: existing, error: fetchError } = await supabase
+        .from(SUPABASE_TABLE)
+        .select("*")
+        .eq("id", id)
+        .single();
+
+    if (fetchError || !existing) {
+        return null;
+    }
+
     const updatePayload = { status };
 
     if (productPrice !== undefined) {
         updatePayload.productPrice = productPrice;
+    }
+
+    if (status === "placed" && normalizeOrderStatus(existing.status) === "pending") {
+        const orderRef = existing.orderId || id;
+        let shipment;
+
+        try {
+            shipment = await createCourierShipment(
+                getSubmissionPublicFields({ ...existing, productPrice: productPrice ?? existing.productPrice })
+            );
+
+            console.log("shipment response:", shipment);
+        } catch (error) {
+            console.error(`[submissionService] shipment creation failed for order ${orderRef}: ${error.message}`);
+            throw error;
+        }
+
+        // TODO: Check if the courier API returns a trackingId in the response and update it here.
+        if (shipment?.raw?.trackingId) {
+            updatePayload.trackingId = shipment.raw.trackingId;
+        }
+
+        console.info(`[submissionService] shipment created for order ${orderRef}; moving status to placed.`);
     }
 
     const { data, error } = await supabase
@@ -214,12 +250,6 @@ export async function updateSubmissionStatus(id, status, productPrice) {
         .single();
 
     if (error) {
-        if (String(error.message || "").toLowerCase().includes("status")) {
-            throw new Error(
-                `Your Supabase table ${SUPABASE_TABLE} is missing the status column. Run server/migrations/001_create_order_submissions.sql in the Supabase SQL editor, then retry.`
-            );
-        }
-
         throw new Error(`Failed to update order status: ${error.message}`);
     }
 
@@ -253,6 +283,62 @@ export async function updateTrackingId(orderId, trackingId) {
     }
 
     return enrichSubmission(data);
+}
+
+// Calls the third-party courier API to create a shipment for an existing order.
+// The order status only moves to "placed" once the courier API confirms success.
+export async function createShipmentForOrder(id) {
+    const { data, error } = await supabase
+        .from(SUPABASE_TABLE)
+        .select("*")
+        .eq("id", id)
+        .single();
+
+    if (error || !data) {
+        return null;
+    }
+
+    const orderRef = data.orderId || id;
+
+    let shipment;
+
+    try {
+        shipment = await createCourierShipment(getSubmissionPublicFields(data));
+    } catch (error) {
+        console.error(`[submissionService] shipment creation failed for order ${orderRef}: ${error.message}`);
+        throw error;
+    }
+
+    const updatePayload = { status: "placed" };
+
+    // TODO: Check if the courier API returns a trackingId in the response and update it here.
+    // if (shipment?.raw?.trackingId) {
+    //     updatePayload.trackingId = shipment.raw.trackingId;
+    // }
+
+    const { data: updatedData, error: updateError } = await supabase
+        .from(SUPABASE_TABLE)
+        .update(updatePayload)
+        .eq("id", id)
+        .select("*")
+        .single();
+
+    if (updateError) {
+        console.error(`[submissionService] shipment created but failed to persist order ${orderRef} status: ${updateError.message}`);
+        throw new Error(`Shipment created but failed to update order status: ${updateError.message}`);
+    }
+
+    console.info(`[submissionService] order ${orderRef} marked as placed after successful shipment creation.`);
+
+    return enrichSubmission(updatedData);
+}
+
+export async function handleNCMWebhookEvent(payload) {
+    const { orderIds, event, status, timestamp } = payload;
+
+    for (const orderId of orderIds) {
+        // Update the order status based on the webhook event
+    }
 }
 
 function getRangeBoundaries(now) {
