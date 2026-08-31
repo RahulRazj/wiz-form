@@ -12,6 +12,15 @@ const STATS_RANGE_OPTIONS = [
   { key: "year", label: "This Year" },
   { key: "allTime", label: "All Time", highlight: true }
 ];
+const API_URL = import.meta.env.API_URL || "";
+
+function apiUrl(path) {
+  if (import.meta.env.DEV || !API_URL) {
+    return path;
+  }
+
+  return new URL(path, API_URL).toString();
+}
 
 function formatFileSize(bytes) {
   if (bytes < 1024 * 1024) {
@@ -216,7 +225,7 @@ export default function App() {
         setBranchesLoading(true);
         setBranchesError("");
 
-        const response = await fetch("/api/branches", { signal: controller.signal });
+        const response = await fetch(apiUrl("/api/branches"), { signal: controller.signal });
         const responseBody = await response.json().catch(() => ({}));
 
         if (!response.ok) {
@@ -267,7 +276,7 @@ export default function App() {
 
     async function verifyStoredToken() {
       try {
-        const response = await fetch("/api/admin/verify", {
+        const response = await fetch(apiUrl("/api/admin/verify"), {
           headers: { "X-Admin-Token": adminToken },
           signal: controller.signal
         });
@@ -313,7 +322,7 @@ export default function App() {
       setIsVerifyingAdminToken(true);
       setAdminAuthError("");
 
-      const response = await fetch("/api/admin/verify", {
+      const response = await fetch(apiUrl("/api/admin/verify"), {
         headers: { "X-Admin-Token": candidate }
       });
 
@@ -392,7 +401,7 @@ export default function App() {
           query.set("status", adminStatusFilter);
         }
 
-        const response = await fetch(`/api/submissions?${query.toString()}`, {
+        const response = await fetch(apiUrl(`/api/submissions?${query.toString()}`), {
           headers: { "X-Admin-Token": adminToken },
           signal: controller.signal
         });
@@ -445,7 +454,7 @@ export default function App() {
         setDashboardStatsLoading(true);
         setDashboardStatsError("");
 
-        const response = await fetch("/api/submissions/stats", {
+        const response = await fetch(apiUrl("/api/submissions/stats"), {
           headers: { "X-Admin-Token": adminToken },
           signal: controller.signal
         });
@@ -521,7 +530,7 @@ export default function App() {
       setIsUpdatingStatus(true);
       setStatusUpdateError("");
 
-      const response = await fetch(`/api/submissions/${submission.id}/status`, {
+      const response = await fetch(apiUrl(`/api/submissions/${submission.id}/status`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
         body: JSON.stringify({ status, productPrice: parsedPrice, trackingId: trimmedTrackingId })
@@ -561,7 +570,7 @@ export default function App() {
       setCodSearchError("");
 
       const query = new URLSearchParams({ search: term, limit: "100" });
-      const response = await fetch(`/api/submissions?${query.toString()}`, {
+      const response = await fetch(apiUrl(`/api/submissions?${query.toString()}`), {
         headers: { "X-Admin-Token": adminToken }
       });
 
@@ -596,7 +605,7 @@ export default function App() {
       setCleanupMessage("");
       setCleanupError("");
 
-      const response = await fetch("/api/admin/cleanup-images", {
+      const response = await fetch(apiUrl("/api/admin/cleanup-images"), {
         method: "POST",
         headers: { "X-Admin-Token": adminToken }
       });
@@ -833,7 +842,7 @@ export default function App() {
 
     try {
       setIsSubmitting(true);
-      const response = await fetch("/api/submissions", {
+      const response = await fetch(apiUrl("/api/submissions"), {
         method: "POST",
         body: payload
       });
