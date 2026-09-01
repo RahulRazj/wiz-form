@@ -1,4 +1,4 @@
-import { ALLOWED_SUBMISSION_FIELDS } from "../config.js";
+import { ALLOWED_SUBMISSION_FIELDS, ADVANCE_AMOUNT_MIN, ADVANCE_AMOUNT_MAX } from "../config.js";
 import { normalizeText, normalizePhone } from "../utils/text.js";
 import { validateFileSignature } from "../utils/fileSignatures.js";
 
@@ -36,8 +36,10 @@ export function validateRequiredFields(body) {
     }
 
     const amount = Number.parseInt(amountText, 10);
-    if (!Number.isFinite(amount) || amount <= 0) {
-        const error = new Error("Enter a valid integer advance amount.");
+    if (!Number.isFinite(amount) || amount < ADVANCE_AMOUNT_MIN || amount > ADVANCE_AMOUNT_MAX) {
+        const error = new Error(
+            `Enter a valid integer advance amount between ${ADVANCE_AMOUNT_MIN} and ${ADVANCE_AMOUNT_MAX}.`
+        );
         error.statusCode = 400;
         throw error;
     }

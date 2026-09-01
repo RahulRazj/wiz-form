@@ -12,11 +12,17 @@ function normalizeText(value) {
     return String(value || "").trim();
 }
 
+function parseIntegerEnv(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export const PORT = Number(process.env.PORT || 3000);
 export const SUPABASE_URL = process.env.SUPABASE_URL;
 export const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-export const SUPABASE_TABLE = process.env.SUPABASE_TABLE || "order_submissions";
-export const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || "order-submissions";
+export const SUPABASE_TABLE = process.env.SUPABASE_TABLE || "wiz_order_preview";
+export const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || "wiz_bucket_preview";
 export const SUPABASE_BUCKETS = Array.from(
     new Set([
         ...normalizeText(SUPABASE_BUCKET)
@@ -31,6 +37,11 @@ export const SUPABASE_BUCKETS = Array.from(
 export const MAX_FILE_SIZE = 5 * 1024 * 1024;
 export const MAX_PRODUCT_IMAGES = 5;
 export const MAX_LIMIT = 100;
+export const ADVANCE_AMOUNT_MIN = parseIntegerEnv(process.env.ADVANCE_AMOUNT_MIN, 200);
+export const ADVANCE_AMOUNT_MAX = Math.max(
+    ADVANCE_AMOUNT_MIN,
+    parseIntegerEnv(process.env.ADVANCE_AMOUNT_MAX, 100000)
+);
 
 export const ORDER_STATUS_VALUES = ["pending", "placed", "created", "dispatched", "delivered", "exchange"];
 export const DEFAULT_ORDER_STATUS = "pending";
