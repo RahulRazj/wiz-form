@@ -608,6 +608,12 @@ body {
 }
 
 
+.field-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+
 .dashboard-filters input,
 .dashboard-filters select {
   height: 40px;
@@ -997,6 +1003,10 @@ body {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.manage-item-meta {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .manage-item-meta span,

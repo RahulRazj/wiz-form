@@ -13,6 +13,32 @@ const STATS_RANGE_OPTIONS = [
   { key: "allTime", label: "All Time", highlight: true }
 ];
 const API_URL = import.meta.env.API_URL || "";
+const ADVANCE_AMOUNT_MIN = Number(import.meta.env.ADVANCE_AMOUNT_MIN || 200);
+const ADVANCE_AMOUNT_MAX = Number(import.meta.env.ADVANCE_AMOUNT_MAX || 100000);
+
+function getAdvanceAmountRangeLabel() {
+  return `${ADVANCE_AMOUNT_MIN.toLocaleString()} - ${ADVANCE_AMOUNT_MAX.toLocaleString()}`;
+}
+
+function getAdvanceAmountError(value) {
+  const advanceAmountText = String(value || "").trim();
+
+  if (!advanceAmountText) {
+    return "This field is required.";
+  }
+
+  if (!/^\d+$/.test(advanceAmountText)) {
+    return "Enter a valid integer advance amount.";
+  }
+
+  const advanceAmount = Number.parseInt(advanceAmountText, 10);
+
+  if (advanceAmount < ADVANCE_AMOUNT_MIN || advanceAmount > ADVANCE_AMOUNT_MAX) {
+    return `Enter an advance amount between ${getAdvanceAmountRangeLabel()}.`;
+  }
+
+  return "";
+}
 
 function apiUrl(path) {
   if (import.meta.env.DEV || !API_URL) {
@@ -651,16 +677,15 @@ export default function App() {
 
   function validateRequiredFields() {
     const nextErrors = {};
-    const advanceAmountText = formData.advanceAmount.trim();
 
     if (!formData.name.trim()) nextErrors.name = "This field is required.";
     if (!formData.phone.trim()) nextErrors.phone = "This field is required.";
     if (!formData.address.trim()) nextErrors.address = "This field is required.";
     if (!formData.city.trim()) nextErrors.city = "This field is required.";
-    if (!advanceAmountText) {
-      nextErrors.advanceAmount = "This field is required.";
-    } else if (!/^\d+$/.test(advanceAmountText) || Number.parseInt(advanceAmountText, 10) <= 0) {
-      nextErrors.advanceAmount = "Enter a valid integer advance amount.";
+    const advanceAmountError = getAdvanceAmountError(formData.advanceAmount);
+
+    if (advanceAmountError) {
+      nextErrors.advanceAmount = advanceAmountError;
     }
 
     if (formData.phone.trim()) {
@@ -736,6 +761,33 @@ export default function App() {
     if (productImageInputRef.current) {
       productImageInputRef.current.value = "";
     }
+  }
+
+  function handleAdvanceAmountChange(value) {
+    const nextValue = value.replace(/\D/g, "");
+
+    setFormData((current) => ({
+      ...current,
+      advanceAmount: nextValue
+    }));
+
+    setErrors((current) => {
+      const nextError = getAdvanceAmountError(nextValue);
+
+      if (nextError === current.advanceAmount) {
+        return current;
+      }
+
+      const nextErrors = { ...current };
+
+      if (nextError) {
+        nextErrors.advanceAmount = nextError;
+      } else {
+        delete nextErrors.advanceAmount;
+      }
+
+      return nextErrors;
+    });
   }
 
   function removeProductImage(id) {
@@ -1296,9 +1348,22 @@ export default function App() {
                   </div>
 
                   <div className="manage-item-meta">
-                    <span>{submission.city || "—"}</span>
-                    <span>{formatCurrency(submission.advanceAmount)}</span>
-                    <span>{formatDateTime(submission.created_at)}</span>
+                    <div>
+                      <span>City</span>
+                      <strong>{submission.city || "—"}</strong>
+                    </div>
+                    <div>
+                      <span>Advance</span>
+                      <strong>{formatCurrency(submission.advanceAmount)}</strong>
+                    </div>
+                    <div>
+                      <span>Tracking ID</span>
+                      <strong>{submission.trackingId || "—"}</strong>
+                    </div>
+                    <div>
+                      <span>Created</span>
+                      <strong>{formatDateTime(submission.created_at)}</strong>
+                    </div>
                   </div>
 
                   <button
@@ -1861,16 +1926,20 @@ export default function App() {
             <div className="amount-input">
               <span>₹</span>
               <input
-                type="text"
+                type="number"
                 id="advanceAmount"
                 name="advanceAmount"
-                placeholder="0"
+                placeholder={String(ADVANCE_AMOUNT_MIN)}
+                min={ADVANCE_AMOUNT_MIN}
+                max={ADVANCE_AMOUNT_MAX}
+                step="1"
                 inputMode="numeric"
                 pattern="[0-9]*"
                 value={formData.advanceAmount}
-                onChange={(event) => updateField("advanceAmount", event.target.value.replace(/\D/g, ""))}
+                onChange={(event) => handleAdvanceAmountChange(event.target.value)}
               />
             </div>
+            <small className="field-hint">Allowed advance amount: {getAdvanceAmountRangeLabel()}</small>
             <small className="error">{errors.advanceAmount}</small>
           </div>
 
