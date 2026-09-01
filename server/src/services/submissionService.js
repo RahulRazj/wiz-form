@@ -15,6 +15,34 @@ import {
 } from "./storageService.js";
 import { createCourierShipment } from "./trackingService.js";
 
+function toFiniteNumber(value) {
+    const number = Number(value);
+
+    return Number.isFinite(number) ? number : null;
+}
+
+function roundMoney(value) {
+    return Math.round(value * 100) / 100;
+}
+
+function calculateCodAmount(productPrice, advanceAmount) {
+    const normalizedProductPrice = toFiniteNumber(productPrice);
+
+    if (normalizedProductPrice == null) {
+        return null;
+    }
+
+    const normalizedAdvanceAmount = Math.max(0, toFiniteNumber(advanceAmount) ?? 0);
+
+    return Math.max(0, roundMoney(normalizedProductPrice - normalizedAdvanceAmount));
+}
+
+function getCourierTrackingId(shipment) {
+    return normalizeText(
+        shipment?.raw?.orderid
+    ) || null;
+}
+
 export function generateSubmissionReference() {
     return `ORD-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 8).toUpperCase()}`;
 }
@@ -31,7 +59,9 @@ export function normalizeOrderStatus(value) {
 }
 
 export function getSubmissionPublicFields(submission) {
-    const productPrice = submission.productPrice != null ? Number(submission.productPrice) : null;
+    const productPrice = toFiniteNumber(submission.productPrice);
+    const advanceAmount = toFiniteNumber(submission.advanceAmount) ?? 0;
+    const codAmount = calculateCodAmount(productPrice, advanceAmount);
 
     return {
         ...submission,
@@ -39,9 +69,10 @@ export function getSubmissionPublicFields(submission) {
         receiptImageUrl: getStoragePublicUrl(submission.receiptImage),
         productImage: getStoragePublicUrl(submission.productImage),
         orderId: submission.orderId || submission.orderid || null,
+        trackingId: normalizeText(submission.trackingId) || null,
         status: normalizeOrderStatus(submission.status),
         productPrice,
-        remainingCod: productPrice != null ? productPrice - Number(submission.advanceAmount || 0) : null
+        cod_charge: codAmount
     };
 }
 
@@ -214,9 +245,29 @@ export async function updateSubmissionStatus(id, status, productPrice) {
     }
 
     const updatePayload = { status };
+    const normalizedAdvanceAmount = toFiniteNumber(existing.advanceAmount);
+    const normalizedProductPrice = toFiniteNumber(productPrice);
 
     if (productPrice !== undefined) {
-        updatePayload.productPrice = productPrice;
+        if (normalizedProductPrice == null || normalizedProductPrice <= 0) {
+            const error = new Error("productPrice must be a positive number.");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (normalizedAdvanceAmount == null) {
+            const error = new Error("Stored advance amount is invalid for this order.");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (normalizedProductPrice < normalizedAdvanceAmount) {
+            const error = new Error("productPrice must be greater than or equal to advanceAmount.");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        updatePayload.productPrice = normalizedProductPrice;
     }
 
     if (status === "placed" && normalizeOrderStatus(existing.status) === "pending") {
@@ -225,7 +276,10 @@ export async function updateSubmissionStatus(id, status, productPrice) {
 
         try {
             shipment = await createCourierShipment(
-                getSubmissionPublicFields({ ...existing, productPrice: productPrice ?? existing.productPrice })
+                getSubmissionPublicFields({
+                    ...existing,
+                    productPrice: normalizedProductPrice ?? existing.productPrice
+                })
             );
 
             console.log("shipment response:", shipment);
@@ -234,9 +288,10 @@ export async function updateSubmissionStatus(id, status, productPrice) {
             throw error;
         }
 
-        // TODO: Check if the courier API returns a trackingId in the response and update it here.
-        if (shipment?.raw?.trackingId) {
-            updatePayload.trackingId = shipment.raw.trackingId;
+        const courierTrackingId = getCourierTrackingId(shipment);
+
+        if (courierTrackingId) {
+            updatePayload.trackingId = courierTrackingId;
         }
 
         console.info(`[submissionService] shipment created for order ${orderRef}; moving status to placed.`);
@@ -310,11 +365,11 @@ export async function createShipmentForOrder(id) {
     }
 
     const updatePayload = { status: "placed" };
+    const courierTrackingId = getCourierTrackingId(shipment);
 
-    // TODO: Check if the courier API returns a trackingId in the response and update it here.
-    // if (shipment?.raw?.trackingId) {
-    //     updatePayload.trackingId = shipment.raw.trackingId;
-    // }
+    if (courierTrackingId) {
+        updatePayload.trackingId = courierTrackingId;
+    }
 
     const { data: updatedData, error: updateError } = await supabase
         .from(SUPABASE_TABLE)
@@ -366,12 +421,15 @@ function createEmptyRangeBucket() {
 
 function addToBucket(bucket, { advanceAmount, productPrice, status }) {
     bucket.count += 1;
-    bucket.advanceReceived += Number.isFinite(advanceAmount) ? advanceAmount : 0;
+    const normalizedAdvanceAmount = toFiniteNumber(advanceAmount) ?? 0;
+    const normalizedProductPrice = toFiniteNumber(productPrice);
 
-    if (productPrice != null) {
+    bucket.advanceReceived += Math.max(0, normalizedAdvanceAmount);
+
+    if (normalizedProductPrice != null) {
         bucket.pricedCount += 1;
-        bucket.totalSales += productPrice;
-        bucket.pendingCod += productPrice - (Number.isFinite(advanceAmount) ? advanceAmount : 0);
+        bucket.totalSales += Math.max(0, normalizedProductPrice);
+        bucket.pendingCod += calculateCodAmount(normalizedProductPrice, normalizedAdvanceAmount) ?? 0;
     }
 
     bucket.statusBreakdown[status] += 1;
@@ -413,8 +471,8 @@ export async function getOrderStats() {
     (data || []).forEach((row) => {
         const createdAt = new Date(row.created_at);
         const entry = {
-            advanceAmount: Number(row.advanceAmount),
-            productPrice: row.productPrice != null ? Number(row.productPrice) : null,
+            advanceAmount: toFiniteNumber(row.advanceAmount) ?? 0,
+            productPrice: toFiniteNumber(row.productPrice),
             status: normalizeOrderStatus(row.status)
         };
 
