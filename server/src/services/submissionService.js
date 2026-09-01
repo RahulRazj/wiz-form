@@ -72,7 +72,8 @@ export function getSubmissionPublicFields(submission) {
         trackingId: normalizeText(submission.trackingId) || null,
         status: normalizeOrderStatus(submission.status),
         productPrice,
-        cod_charge: codAmount
+        cod_charge: codAmount,
+        remainingCod: codAmount
     };
 }
 
