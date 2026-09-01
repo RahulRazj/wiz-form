@@ -232,7 +232,7 @@ export async function getSubmissionByReference(submissionReference) {
     return enrichSubmission(data);
 }
 
-// Moving pending -> placed must create the courier shipment first; the status only
+// Moving placed -> created must create the courier shipment first; the status only
 // changes once that call succeeds, so a failed shipment never leaves an order "placed".
 export async function updateSubmissionStatus(id, status, productPrice) {
     const { data: existing, error: fetchError } = await supabase
@@ -271,7 +271,7 @@ export async function updateSubmissionStatus(id, status, productPrice) {
         updatePayload.productPrice = normalizedProductPrice;
     }
 
-    if (status === "placed" && normalizeOrderStatus(existing.status) === "pending") {
+    if (status === "created" && normalizeOrderStatus(existing.status) === "placed") {
         const orderRef = existing.orderId || id;
         let shipment;
 
