@@ -4,7 +4,7 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const MAX_PRODUCT_IMAGES = 5;
 const PRODUCT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/avif"];
 const RECEIPT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/avif", "application/pdf"];
-const ORDER_STATUS_OPTIONS = ["pending", "placed", "created", "dispatched", "delivered", "exchange"];
+const ORDER_STATUS_OPTIONS = ["pending", "placed", "created", "dispatched", "delivered", "exchange", "cancelled"];
 const STATS_RANGE_OPTIONS = [
   { key: "today", label: "Today" },
   { key: "week", label: "This Week" },
@@ -61,7 +61,7 @@ function formatDateTime(value) {
     return "—";
   }
 
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleDateString();
 }
 
 function formatCurrency(value) {
@@ -158,7 +158,16 @@ export default function App() {
   const [selectedSubmission, setSelectedSubmission] = useState(null);
   const [selectedImageUrl, setSelectedImageUrl] = useState("");
   const [viewSubmission, setViewSubmission] = useState(null);
+  const [isEditingMode, setIsEditingMode] = useState(false);
+  const [editNameDraft, setEditNameDraft] = useState("");
+  const [editPhoneDraft, setEditPhoneDraft] = useState("");
+  const [editAddressDraft, setEditAddressDraft] = useState("");
+  const [editCityDraft, setEditCityDraft] = useState("");
+  const [editAdvanceDraft, setEditAdvanceDraft] = useState("");
+  const [editSizeDraft, setEditSizeDraft] = useState("");
+  const [editTrackingDraft, setEditTrackingDraft] = useState("");
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+  const [isDeletingOrder, setIsDeletingOrder] = useState(false);
   const [statusUpdateError, setStatusUpdateError] = useState("");
   const [orderPriceDraft, setOrderPriceDraft] = useState("");
   const [orderStatusDraft, setOrderStatusDraft] = useState("");
@@ -173,6 +182,15 @@ export default function App() {
   const [codSearchResults, setCodSearchResults] = useState(null);
   const [codSearchLoading, setCodSearchLoading] = useState(false);
   const [codSearchError, setCodSearchError] = useState("");
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: null,
+    confirmText: "Confirm",
+    cancelText: "Cancel",
+    isDanger: false
+  });
   const [adminToken, setAdminToken] = useState(() => {
     try {
       return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
@@ -516,6 +534,14 @@ export default function App() {
     setStatusUpdateError("");
     setOrderPriceDraft(submission.productPrice != null ? String(submission.productPrice) : "");
     setOrderStatusDraft(submission.status || "placed");
+    setEditNameDraft(submission.name || "");
+    setEditPhoneDraft(submission.phone || "");
+    setEditAddressDraft(submission.address || "");
+    setEditCityDraft(submission.city || "");
+    setEditAdvanceDraft(submission.advanceAmount != null ? String(submission.advanceAmount) : "0");
+    setEditSizeDraft(submission.productSize || "");
+    setEditTrackingDraft(submission.trackingId || "");
+    setIsEditingMode(false);
     setViewSubmission(submission);
   }
 
@@ -524,6 +550,7 @@ export default function App() {
     setStatusUpdateError("");
     setOrderPriceDraft("");
     setOrderStatusDraft("");
+    setIsEditingMode(false);
   }
 
   function applySubmissionUpdate(updatedSubmission) {
@@ -578,6 +605,146 @@ export default function App() {
     } finally {
       setIsUpdatingStatus(false);
     }
+  }
+
+  async function handleSaveEditedDetails() {
+    if ((viewSubmission.status || "").toLowerCase() === "delivered") {
+      setStatusUpdateError("Delivered orders cannot be edited.");
+      return;
+    }
+
+    const name = editNameDraft.trim();
+    const phone = editPhoneDraft.trim();
+    const address = editAddressDraft.trim();
+    const city = editCityDraft.trim();
+    const advanceAmount = Number(editAdvanceDraft);
+    const productPrice = orderPriceDraft.trim() !== "" ? Number(orderPriceDraft) : null;
+    const productSize = editSizeDraft.trim();
+    const trackingId = editTrackingDraft.trim();
+    const status = orderStatusDraft;
+
+    if (!name || !phone || !address || !city) {
+      setStatusUpdateError("Name, Phone, Address, and City are required.");
+      return;
+    }
+
+    if (!Number.isFinite(advanceAmount) || advanceAmount < 0) {
+      setStatusUpdateError("Please enter a valid advance amount.");
+      return;
+    }
+
+    if (productPrice !== null && (!Number.isFinite(productPrice) || productPrice <= 0)) {
+      setStatusUpdateError("Please enter a valid product price.");
+      return;
+    }
+
+    if (productPrice !== null && productPrice < advanceAmount) {
+      setStatusUpdateError("Product price must be greater than or equal to advance amount.");
+      return;
+    }
+
+    const performSave = async () => {
+      try {
+        setIsUpdatingStatus(true);
+        setStatusUpdateError("");
+
+        const response = await fetch(apiUrl(`/api/submissions/${viewSubmission.id}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
+          body: JSON.stringify({
+            name,
+            phone,
+            address,
+            city,
+            advanceAmount,
+            productPrice,
+            productSize,
+            trackingId,
+            status
+          })
+        });
+
+        const responseBody = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(responseBody.error || responseBody.message || "Failed to update the order.");
+        }
+
+        applySubmissionUpdate(responseBody.data);
+        setIsEditingMode(false);
+      } catch (error) {
+        setStatusUpdateError(
+          error instanceof Error && error.message ? error.message : "Failed to update the order."
+        );
+      } finally {
+        setIsUpdatingStatus(false);
+        setConfirmModal({ isOpen: false, title: "", message: "", onConfirm: null, confirmText: "Confirm", cancelText: "Cancel", isDanger: false });
+      }
+    };
+
+    setConfirmModal({
+      isOpen: true,
+      title: "Confirm Edit",
+      message: `Are you sure you want to save changes for order ${viewSubmission.orderId || `id ${viewSubmission.id}`}?`,
+      confirmText: "Save Changes",
+      cancelText: "Cancel",
+      isDanger: false,
+      onConfirm: performSave
+    });
+  }
+
+  async function handleDeleteOrder(submission) {
+    if ((submission.status || "").toLowerCase() === "delivered") {
+      alert("Delivered orders cannot be deleted.");
+      return;
+    }
+
+    const label = submission.orderId || `id ${submission.id}`;
+
+    const performDelete = async () => {
+      try {
+        setIsDeletingOrder(true);
+
+        const response = await fetch(apiUrl(`/api/submissions/${submission.id}`), {
+          method: "DELETE",
+          headers: { "X-Admin-Token": adminToken }
+        });
+
+        const responseBody = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(responseBody.error || responseBody.message || "Failed to delete the order.");
+        }
+
+        if (viewSubmission && viewSubmission.id === submission.id) {
+          closeSubmissionView();
+        }
+
+        setSubmissions((current) => current.filter((item) => item.id !== submission.id));
+        
+        setAdminPagination((current) => ({
+          ...current,
+          total: Math.max(0, current.total - 1)
+        }));
+
+        alert(`Order ${label} deleted successfully.`);
+      } catch (error) {
+        alert(error instanceof Error && error.message ? error.message : "Failed to delete the order.");
+      } finally {
+        setIsDeletingOrder(false);
+        setConfirmModal({ isOpen: false, title: "", message: "", onConfirm: null, confirmText: "Confirm", cancelText: "Cancel", isDanger: false });
+      }
+    };
+
+    setConfirmModal({
+      isOpen: true,
+      title: "Confirm Delete",
+      message: `Are you sure you want to permanently delete order ${label}? This will delete the database record and all associated images.`,
+      confirmText: "Delete Order",
+      cancelText: "Cancel",
+      isDanger: true,
+      onConfirm: performDelete
+    });
   }
 
   async function handleCodSearch(event) {
@@ -1247,6 +1414,7 @@ export default function App() {
                   setAdminPage(1);
                   setAdminStatusFilter(event.target.value);
                 }}
+                className={`status-select-${adminStatusFilter}`}
               >
                 <option value="all">All</option>
                 {ORDER_STATUS_OPTIONS.map((status) => (
@@ -1366,13 +1534,23 @@ export default function App() {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    className="secondary-button compact-button"
-                    onClick={() => openSubmissionView(submission)}
-                  >
-                    View
-                  </button>
+                  <div className="manage-item-actions">
+                    <button
+                      type="button"
+                      className="secondary-button compact-button"
+                      onClick={() => openSubmissionView(submission)}
+                    >
+                      View
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-button compact-button"
+                      onClick={() => handleDeleteOrder(submission)}
+                      disabled={isDeletingOrder}
+                    >
+                      {isDeletingOrder ? "Deleting..." : "Delete"}
+                    </button>
+                  </div>
                 </article>
               );
             })}
@@ -1382,9 +1560,10 @@ export default function App() {
             <table className="dashboard-table">
               <thead>
                 <tr>
+                  <th>Order</th>
                   <th>Customer</th>
                   <th>Location</th>
-                  <th>Advance Paid</th>
+                  <th>Price</th>
                   <th>Images</th>
                   <th>Receipt</th>
                   <th>Status</th>
@@ -1406,6 +1585,12 @@ export default function App() {
                     >
                       <td>
                         <div className="dashboard-stacked-detail">
+                          <strong>{submission.orderId || "—"}</strong>
+                          <span>TC: { submission.trackingId ? `#${submission.trackingId}` : "—"}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="dashboard-stacked-detail">
                           <strong>{submission.name || "—"}</strong>
                           <span>{submission.phone || "—"}</span>
                         </div>
@@ -1416,7 +1601,12 @@ export default function App() {
                           <span>{submission.address || "—"}</span>
                         </div>
                       </td>
-                      <td>{formatCurrency(submission.advanceAmount)}</td>
+                      <td>
+                        <div className="dashboard-stacked-detail">
+                          <span>Adv: {formatCurrency(submission.advanceAmount)}</span>
+                          <span>Price: {submission.productPrice != null ? formatCurrency(submission.productPrice) : "—"}</span>
+                        </div>
+                      </td>
                       <td>
                         {productImagesForSubmission.length > 0 ? (
                           <span className="image-stack">
@@ -1607,92 +1797,161 @@ export default function App() {
             </div>
 
             <div className="submission-detail-modal-body">
-              <div className="submission-meta-grid">
-                <div>
-                  <span>Customer</span>
-                  <strong>{viewSubmission.name || "—"}</strong>
-                </div>
-                <div>
-                  <span>Phone</span>
-                  <strong>{viewSubmission.phone || "—"}</strong>
-                </div>
-                <div>
-                  <span>City</span>
-                  <strong>{viewSubmission.city || "—"}</strong>
-                </div>
-                <div>
-                  <span>Advance Paid</span>
-                  <strong>{formatCurrency(viewSubmission.advanceAmount)}</strong>
-                </div>
-                {viewSubmission.productSize ? (
-                  <div>
+              {isEditingMode ? (
+                <div className="edit-order-form-grid">
+                  <label className="edit-order-field">
+                    <span>Customer Name</span>
+                    <input
+                      type="text"
+                      className="edit-order-input"
+                      value={editNameDraft}
+                      onChange={(e) => setEditNameDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field">
+                    <span>Phone</span>
+                    <input
+                      type="text"
+                      className="edit-order-input"
+                      value={editPhoneDraft}
+                      onChange={(e) => setEditPhoneDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field">
+                    <span>City</span>
+                    <input
+                      type="text"
+                      className="edit-order-input"
+                      value={editCityDraft}
+                      onChange={(e) => setEditCityDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field">
+                    <span>Advance Paid</span>
+                    <input
+                      type="number"
+                      className="edit-order-input"
+                      value={editAdvanceDraft}
+                      onChange={(e) => setEditAdvanceDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field">
                     <span>Size</span>
-                    <strong>{viewSubmission.productSize}</strong>
-                  </div>
-                ) : null}
-                {viewSubmission.trackingId ? (
-                  <div>
+                    <input
+                      type="text"
+                      className="edit-order-input"
+                      value={editSizeDraft}
+                      onChange={(e) => setEditSizeDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field">
                     <span>Tracking ID</span>
-                    <strong>{viewSubmission.trackingId}</strong>
+                    <input
+                      type="text"
+                      className="edit-order-input"
+                      value={editTrackingDraft}
+                      onChange={(e) => setEditTrackingDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field edit-order-field-full">
+                    <span>Address</span>
+                    <textarea
+                      className="edit-order-textarea"
+                      value={editAddressDraft}
+                      onChange={(e) => setEditAddressDraft(e.target.value)}
+                    />
+                  </label>
+                </div>
+              ) : (
+                <>
+                  <div className="submission-meta-grid">
+                    <div>
+                      <span>Customer</span>
+                      <strong>{viewSubmission.name || "—"}</strong>
+                    </div>
+                    <div>
+                      <span>Phone</span>
+                      <strong>{viewSubmission.phone || "—"}</strong>
+                    </div>
+                    <div>
+                      <span>City</span>
+                      <strong>{viewSubmission.city || "—"}</strong>
+                    </div>
+                    <div>
+                      <span>Advance Paid</span>
+                      <strong>{formatCurrency(viewSubmission.advanceAmount)}</strong>
+                    </div>
+                    {viewSubmission.productSize ? (
+                      <div>
+                        <span>Size</span>
+                        <strong>{viewSubmission.productSize}</strong>
+                      </div>
+                    ) : null}
+                    {viewSubmission.trackingId ? (
+                      <div>
+                        <span>Tracking ID</span>
+                        <strong>{viewSubmission.trackingId}</strong>
+                      </div>
+                    ) : null}
+                    {viewSubmission.productPrice != null ? (
+                      <>
+                        <div>
+                          <span>Price</span>
+                          <strong>{formatCurrency(viewSubmission.productPrice)}</strong>
+                        </div>
+                        <div>
+                          <span>Remaining COD</span>
+                          <strong>{formatCurrency(viewSubmission.remainingCod)}</strong>
+                        </div>
+                      </>
+                    ) : null}
                   </div>
-                ) : null}
-                {viewSubmission.productPrice != null ? (
-                  <>
-                    <div>
-                      <span>Price</span>
-                      <strong>{formatCurrency(viewSubmission.productPrice)}</strong>
-                    </div>
-                    <div>
-                      <span>Remaining COD</span>
-                      <strong>{formatCurrency(viewSubmission.remainingCod)}</strong>
-                    </div>
-                  </>
-                ) : null}
-              </div>
 
-              <p className="submission-address">{viewSubmission.address || "No address provided."}</p>
+                  <p className="submission-address">{viewSubmission.address || "No address provided."}</p>
 
-              <div className="submission-image-grid">
-                {getSubmissionProductImages(viewSubmission).map((imageUrl, index) => (
-                  <a
-                    key={`view-${viewSubmission.orderId || viewSubmission.id}-${imageUrl}`}
-                    href={imageUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="submission-image-button"
-                  >
-                    <img src={imageUrl} alt={`Submission image ${index + 1}`} loading="lazy" />
-                  </a>
-                ))}
-              </div>
+                  <div className="submission-image-grid">
+                    {getSubmissionProductImages(viewSubmission).map((imageUrl, index) => (
+                      <a
+                        key={`view-${viewSubmission.orderId || viewSubmission.id}-${imageUrl}`}
+                        href={imageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="submission-image-button"
+                      >
+                        <img src={imageUrl} alt={`Submission image ${index + 1}`} loading="lazy" />
+                      </a>
+                    ))}
+                  </div>
 
-              <div className="submission-receipt-section">
-                <span className="submission-inspector-section-title">Receipt</span>
+                  <div className="submission-receipt-section">
+                    <span className="submission-inspector-section-title">Receipt</span>
 
-                {getSubmissionReceiptImage(viewSubmission) ? (
-                  isReceiptImageUrl(getSubmissionReceiptImage(viewSubmission)) ? (
-                    <button
-                      type="button"
-                      className="submission-image-button submission-receipt-preview"
-                      onClick={() => setSelectedImageUrl(getSubmissionReceiptImage(viewSubmission))}
-                    >
-                      <img src={getSubmissionReceiptImage(viewSubmission)} alt="Receipt preview" loading="lazy" />
-                    </button>
-                  ) : (
-                    <a
-                      className="submission-receipt-file"
-                      href={getSubmissionReceiptImage(viewSubmission)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <span style={{ fontSize: 28 }}>📄</span>
-                      Open receipt (PDF)
-                    </a>
-                  )
-                ) : (
-                  <span className="dashboard-empty-cell">No receipt attached.</span>
-                )}
-              </div>
+                    {getSubmissionReceiptImage(viewSubmission) ? (
+                      isReceiptImageUrl(getSubmissionReceiptImage(viewSubmission)) ? (
+                        <button
+                          type="button"
+                          className="submission-image-button submission-receipt-preview"
+                          onClick={() => setSelectedImageUrl(getSubmissionReceiptImage(viewSubmission))}
+                        >
+                          <img src={getSubmissionReceiptImage(viewSubmission)} alt="Receipt preview" loading="lazy" />
+                        </button>
+                      ) : (
+                        <a
+                          className="submission-receipt-file"
+                          href={getSubmissionReceiptImage(viewSubmission)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <span style={{ fontSize: 28 }}>📄</span>
+                          Open receipt (PDF)
+                        </a>
+                      )
+                    ) : (
+                      <span className="dashboard-empty-cell">No receipt attached.</span>
+                    )}
+                  </div>
+                </>
+              )}
 
               {statusUpdateError ? (
                 <p className="dashboard-state dashboard-state-error">{statusUpdateError}</p>
@@ -1700,46 +1959,118 @@ export default function App() {
             </div>
 
             <div className="submission-detail-modal-actions">
-              <label className="submission-status-field">
-                <span>Status</span>
-                <select
-                  value={orderStatusDraft}
-                  onChange={(event) => setOrderStatusDraft(event.target.value)}
-                >
-                  <option value="" disabled>Select status</option>
-                  {ORDER_STATUS_OPTIONS.map((status) => (
-                    <option key={status} value={status}>
-                      {status.charAt(0).toUpperCase() + status.slice(1)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {isEditingMode ? (
+                <>
+                  <label className="submission-status-field">
+                    <span>Status</span>
+                    <select
+                      value={orderStatusDraft}
+                      onChange={(event) => setOrderStatusDraft(event.target.value)}
+                      className={`status-select-${orderStatusDraft}`}
+                    >
+                      <option value="" disabled>Select status</option>
+                      {ORDER_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status.charAt(0).toUpperCase() + status.slice(1)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-              <label className="submission-price-field">
-                <span>Product Price</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="Enter product price"
-                  value={orderPriceDraft}
-                  onChange={(event) => setOrderPriceDraft(event.target.value)}
-                />
-              </label>
+                  <label className="submission-price-field">
+                    <span>Product Price</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Enter product price"
+                      value={orderPriceDraft}
+                      onChange={(event) => setOrderPriceDraft(event.target.value)}
+                    />
+                  </label>
 
-              <button
-                type="button"
-                className="primary-button"
-                disabled={
-                  isUpdatingStatus ||
-                  !orderStatusDraft ||
-                  !Number.isFinite(Number(orderPriceDraft)) ||
-                  Number(orderPriceDraft) <= 0
-                }
-                onClick={() => handleUpdateOrder(viewSubmission, orderStatusDraft, orderPriceDraft)}
-              >
-                {isUpdatingStatus ? "Saving..." : "Save"}
-              </button>
+                  <button
+                    type="button"
+                    className="secondary-button compact-button"
+                    onClick={() => setIsEditingMode(false)}
+                    disabled={isUpdatingStatus}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    className="primary-button compact-button"
+                    onClick={handleSaveEditedDetails}
+                    disabled={
+                      isUpdatingStatus ||
+                      !editNameDraft.trim() ||
+                      !editPhoneDraft.trim() ||
+                      !editAddressDraft.trim() ||
+                      !editCityDraft.trim() ||
+                      !Number.isFinite(Number(editAdvanceDraft)) ||
+                      Number(editAdvanceDraft) < 0
+                    }
+                  >
+                    {isUpdatingStatus ? "Saving..." : "Save Changes"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {(viewSubmission.status || "").toLowerCase() !== "delivered" && (
+                    <button
+                      type="button"
+                      className="secondary-button compact-button"
+                      onClick={() => setIsEditingMode(true)}
+                    >
+                      Edit Details
+                    </button>
+                  )}
+
+                  <label className="submission-status-field">
+                    <span>Status</span>
+                    <select
+                      value={orderStatusDraft}
+                      onChange={(event) => setOrderStatusDraft(event.target.value)}
+                      className={`status-select-${orderStatusDraft}`}
+                    >
+                      <option value="" disabled>Select status</option>
+                      {ORDER_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status.charAt(0).toUpperCase() + status.slice(1)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="submission-price-field">
+                    <span>Product Price</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Enter product price"
+                      value={orderPriceDraft}
+                      onChange={(event) => setOrderPriceDraft(event.target.value)}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    className="primary-button compact-button"
+                    disabled={
+                      isUpdatingStatus ||
+                      !orderStatusDraft ||
+                      !Number.isFinite(Number(orderPriceDraft)) ||
+                      Number(orderPriceDraft) <= 0 ||
+                      (viewSubmission.status || "").toLowerCase() === "delivered"
+                    }
+                    onClick={() => handleUpdateOrder(viewSubmission, orderStatusDraft, orderPriceDraft)}
+                  >
+                    {isUpdatingStatus ? "Saving..." : "Save"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -2071,6 +2402,46 @@ export default function App() {
       <footer className="page-footer">
         <p>Wizzzey. Simple, secure, and reliable order submissions.</p>
       </footer>
+
+      {confirmModal.isOpen ? (
+        <div className="image-modal-backdrop" role="presentation" onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })}>
+          <div className="custom-confirm-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="custom-confirm-modal-header">
+              <strong>{confirmModal.title}</strong>
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="custom-confirm-modal-body">
+              <p>{confirmModal.message}</p>
+            </div>
+            <div className="custom-confirm-modal-actions">
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+              >
+                {confirmModal.cancelText}
+              </button>
+              <button
+                type="button"
+                className={confirmModal.isDanger ? "danger-button compact-button" : "primary-button compact-button"}
+                onClick={() => {
+                  if (confirmModal.onConfirm) {
+                    confirmModal.onConfirm();
+                  }
+                }}
+              >
+                {confirmModal.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

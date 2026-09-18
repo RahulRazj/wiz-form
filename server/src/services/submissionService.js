@@ -11,7 +11,8 @@ import {
     uploadFiles,
     removeFiles,
     getStoragePublicUrl,
-    listSubmissionProductImageUrls
+    listSubmissionProductImageUrls,
+    removeSubmissionImageFiles
 } from "./storageService.js";
 import { createCourierShipment } from "./trackingService.js";
 
@@ -48,9 +49,7 @@ export function generateSubmissionReference() {
 }
 
 export function generateOrderId() {
-    return `WZ-${Date.now().toString(36).toUpperCase()}-${randomUUID()
-        .slice(0, 6)
-        .toUpperCase()}`;
+    return randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase();
 }
 
 export function normalizeOrderStatus(value) {
@@ -244,7 +243,6 @@ export async function updateSubmissionStatus(id, status, productPrice) {
     if (fetchError || !existing) {
         return null;
     }
-
     const updatePayload = { status };
     const normalizedAdvanceAmount = toFiniteNumber(existing.advanceAmount);
     const normalizedProductPrice = toFiniteNumber(productPrice);
@@ -283,7 +281,6 @@ export async function updateSubmissionStatus(id, status, productPrice) {
                 })
             );
 
-            console.log("shipment response:", shipment);
         } catch (error) {
             console.error(`[submissionService] shipment creation failed for order ${orderRef}: ${error.message}`);
             throw error;
@@ -513,6 +510,115 @@ export async function getOrderStats() {
         },
         receipts
     };
+}
+
+export async function deleteSubmission(id) {
+    const { data: existing, error: fetchError } = await supabase
+        .from(SUPABASE_TABLE)
+        .select("*")
+        .eq("id", id)
+        .single();
+
+    if (fetchError || !existing) {
+        return null;
+    }
+
+    if (normalizeOrderStatus(existing.status) === "delivered") {
+        const error = new Error("Delivered orders cannot be deleted.");
+        error.statusCode = 400;
+        throw error;
+    }
+
+    try {
+        await removeSubmissionImageFiles(existing);
+    } catch (storageError) {
+        console.error(`[submissionService] Failed to remove storage files for ID ${id}:`, storageError);
+    }
+
+    const { error: deleteError } = await supabase
+        .from(SUPABASE_TABLE)
+        .delete()
+        .eq("id", id);
+
+    if (deleteError) {
+        throw new Error(`Failed to delete order submission: ${deleteError.message}`);
+    }
+
+    return existing;
+}
+
+export async function updateSubmission(id, fields) {
+    const { data: existing, error: fetchError } = await supabase
+        .from(SUPABASE_TABLE)
+        .select("*")
+        .eq("id", id)
+        .single();
+
+    if (fetchError || !existing) {
+        return null;
+    }
+
+    if (normalizeOrderStatus(existing.status) === "delivered") {
+        const error = new Error("Delivered orders cannot be edited.");
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const updatePayload = {};
+    if (fields.name !== undefined) updatePayload.name = normalizeText(fields.name);
+    if (fields.phone !== undefined) updatePayload.phone = normalizeText(fields.phone);
+    if (fields.address !== undefined) updatePayload.address = normalizeText(fields.address);
+    if (fields.city !== undefined) updatePayload.city = normalizeText(fields.city);
+    if (fields.productSize !== undefined) updatePayload.productSize = normalizeText(fields.productSize);
+
+    if (fields.status !== undefined) {
+        const status = normalizeOrderStatus(fields.status);
+        updatePayload.status = status;
+    }
+
+    if (fields.advanceAmount !== undefined) {
+        const normalizedAdvanceAmount = toFiniteNumber(fields.advanceAmount);
+        if (normalizedAdvanceAmount == null || normalizedAdvanceAmount < 0) {
+            const error = new Error("advanceAmount must be a non-negative number.");
+            error.statusCode = 400;
+            throw error;
+        }
+        updatePayload.advanceAmount = normalizedAdvanceAmount;
+    }
+
+    if (fields.productPrice !== undefined && fields.productPrice !== null) {
+        const normalizedProductPrice = toFiniteNumber(fields.productPrice);
+        if (normalizedProductPrice == null || normalizedProductPrice <= 0) {
+            const error = new Error("productPrice must be a positive number.");
+            error.statusCode = 400;
+            throw error;
+        }
+        updatePayload.productPrice = normalizedProductPrice;
+    } else if (fields.productPrice === null) {
+        updatePayload.productPrice = null;
+    }
+
+    const finalPrice = updatePayload.productPrice !== undefined ? updatePayload.productPrice : toFiniteNumber(existing.productPrice);
+    const finalAdvance = updatePayload.advanceAmount !== undefined ? updatePayload.advanceAmount : toFiniteNumber(existing.advanceAmount);
+
+    if (finalPrice !== null && finalAdvance !== null && finalPrice < finalAdvance) {
+        const error = new Error("productPrice must be greater than or equal to advanceAmount.");
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const { data, error } = await supabase
+        .from(SUPABASE_TABLE)
+        .update(updatePayload)
+        .eq("id", id)
+        .select("*")
+        .single();
+
+    if (error) {
+        throw new Error(`Failed to update order: ${error.message}`);
+    }
+
+    return enrichSubmission(data);
 }
 
 

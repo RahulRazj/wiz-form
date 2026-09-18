@@ -43,7 +43,7 @@ export const ADVANCE_AMOUNT_MAX = Math.max(
     parseIntegerEnv(process.env.ADVANCE_AMOUNT_MAX, 100000)
 );
 
-export const ORDER_STATUS_VALUES = ["pending", "placed", "created", "dispatched", "delivered", "exchange"];
+export const ORDER_STATUS_VALUES = ["pending", "placed", "created", "dispatched", "delivered", "exchange", "cancelled"];
 export const DEFAULT_ORDER_STATUS = "pending";
 
 export const ADMIN_SECRET_TOKEN = process.env.ADMIN_SECRET_TOKEN || "";
