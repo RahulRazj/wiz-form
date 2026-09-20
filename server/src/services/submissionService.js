@@ -5,7 +5,7 @@ import {
     ORDER_STATUS_VALUES,
     DEFAULT_ORDER_STATUS
 } from "../config.js";
-import { normalizeText } from "../utils/text.js";
+import { normalizeText, normalizePhone } from "../utils/text.js";
 import {
     uploadFile,
     uploadFiles,
@@ -38,6 +38,17 @@ function calculateCodAmount(productPrice, advanceAmount) {
     return Math.max(0, roundMoney(normalizedProductPrice - normalizedAdvanceAmount));
 }
 
+function getReceivedCodAmount(submission, codAmount) {
+    const normalizedStatus = normalizeOrderStatus(submission.status);
+    const storedReceivedAmount = toFiniteNumber(submission.codReceivedAmount);
+
+    if (normalizedStatus === "delivered" || normalizedStatus === "cancelled") {
+        return Math.max(0, storedReceivedAmount ?? codAmount ?? 0);
+    }
+
+    return Math.max(0, storedReceivedAmount ?? 0);
+}
+
 function getCourierTrackingId(shipment) {
     return normalizeText(
         shipment?.raw?.orderid
@@ -61,6 +72,7 @@ export function getSubmissionPublicFields(submission) {
     const productPrice = toFiniteNumber(submission.productPrice);
     const advanceAmount = toFiniteNumber(submission.advanceAmount) ?? 0;
     const codAmount = calculateCodAmount(productPrice, advanceAmount);
+    const codReceivedAmount = getReceivedCodAmount(submission, codAmount);
 
     return {
         ...submission,
@@ -71,8 +83,9 @@ export function getSubmissionPublicFields(submission) {
         trackingId: normalizeText(submission.trackingId) || null,
         status: normalizeOrderStatus(submission.status),
         productPrice,
+        codReceivedAmount,
         cod_charge: codAmount,
-        remainingCod: codAmount
+        remainingCod: codAmount == null ? null : Math.max(0, roundMoney(codAmount - codReceivedAmount))
     };
 }
 
@@ -118,7 +131,8 @@ export async function createSubmission(body, files) {
         advanceAmount: body.advanceAmount,
         receiptImage: receiptUpload ? getStoragePublicUrl(receiptUpload.path) : null,
         address: normalizeText(body.address),
-        status: DEFAULT_ORDER_STATUS
+        status: DEFAULT_ORDER_STATUS,
+        codReceivedAmount: 0
     };
 
     const { error, data } = await supabase
@@ -269,6 +283,17 @@ export async function updateSubmissionStatus(id, status, productPrice) {
         updatePayload.productPrice = normalizedProductPrice;
     }
 
+    const codAmount = calculateCodAmount(
+        normalizedProductPrice ?? existing.productPrice,
+        normalizedAdvanceAmount
+    );
+
+    if (status === "delivered" || status === "cancelled") {
+        updatePayload.codReceivedAmount = codAmount ?? 0;
+    } else {
+        updatePayload.codReceivedAmount = 0;
+    }
+
     if (status === "created" && normalizeOrderStatus(existing.status) === "placed") {
         const orderRef = existing.orderId || id;
         let shipment;
@@ -413,7 +438,20 @@ function createEmptyRangeBucket() {
         advanceReceived: 0,
         totalSales: 0,
         pendingCod: 0,
-        statusBreakdown: { pending: 0, placed: 0, created: 0, dispatched: 0, delivered: 0, exchange: 0 }
+        statusBreakdown: { pending: 0, placed: 0, created: 0, dispatched: 0, delivered: 0, exchange: 0, cancelled: 0 },
+        statusSalesBreakdown: { pending: 0, placed: 0, created: 0, dispatched: 0, delivered: 0, exchange: 0, cancelled: 0 }
+    };
+}
+
+function createEmptyStatusTotals() {
+    return {
+        pending: { qty: 0, amount: 0 },
+        placed: { qty: 0, amount: 0 },
+        created: { qty: 0, amount: 0 },
+        dispatched: { qty: 0, amount: 0 },
+        delivered: { qty: 0, amount: 0 },
+        exchange: { qty: 0, amount: 0 },
+        cancelled: { qty: 0, amount: 0 }
     };
 }
 
@@ -421,16 +459,19 @@ function addToBucket(bucket, { advanceAmount, productPrice, status }) {
     bucket.count += 1;
     const normalizedAdvanceAmount = toFiniteNumber(advanceAmount) ?? 0;
     const normalizedProductPrice = toFiniteNumber(productPrice);
+    const codAmount = calculateCodAmount(normalizedProductPrice, normalizedAdvanceAmount);
+    const receivedAmount = status === "delivered" || status === "cancelled" ? codAmount ?? 0 : 0;
 
     bucket.advanceReceived += Math.max(0, normalizedAdvanceAmount);
 
     if (normalizedProductPrice != null) {
         bucket.pricedCount += 1;
         bucket.totalSales += Math.max(0, normalizedProductPrice);
-        bucket.pendingCod += calculateCodAmount(normalizedProductPrice, normalizedAdvanceAmount) ?? 0;
+        bucket.pendingCod += Math.max(0, (codAmount ?? 0) - receivedAmount);
+        bucket.statusSalesBreakdown[status] = (bucket.statusSalesBreakdown[status] ?? 0) + Math.max(0, normalizedProductPrice);
     }
 
-    bucket.statusBreakdown[status] += 1;
+    bucket.statusBreakdown[status] = (bucket.statusBreakdown[status] ?? 0) + 1;
 }
 
 function roundBucket(bucket) {
@@ -440,14 +481,15 @@ function roundBucket(bucket) {
         advanceReceived: Math.round(bucket.advanceReceived * 100) / 100,
         totalSales: Math.round(bucket.totalSales * 100) / 100,
         pendingCod: Math.round(bucket.pendingCod * 100) / 100,
-        statusBreakdown: bucket.statusBreakdown
+        statusBreakdown: bucket.statusSalesBreakdown,
+        statusCountBreakdown: bucket.statusBreakdown
     };
 }
 
 export async function getOrderStats() {
     const { data, error } = await supabase
         .from(SUPABASE_TABLE)
-        .select("id, created_at, advanceAmount, productPrice, status, receiptImage");
+        .select("id, created_at, advanceAmount, productPrice, status, receiptImage, codReceivedAmount");
 
     if (error) {
         throw new Error(`Failed to load order statistics: ${error.message}`);
@@ -471,7 +513,8 @@ export async function getOrderStats() {
         const entry = {
             advanceAmount: toFiniteNumber(row.advanceAmount) ?? 0,
             productPrice: toFiniteNumber(row.productPrice),
-            status: normalizeOrderStatus(row.status)
+            status: normalizeOrderStatus(row.status),
+            codReceivedAmount: toFiniteNumber(row.codReceivedAmount)
         };
 
         addToBucket(ranges.allTime, entry);
@@ -566,7 +609,17 @@ export async function updateSubmission(id, fields) {
 
     const updatePayload = {};
     if (fields.name !== undefined) updatePayload.name = normalizeText(fields.name);
-    if (fields.phone !== undefined) updatePayload.phone = normalizeText(fields.phone);
+    if (fields.phone !== undefined) {
+        const normalizedPhone = normalizePhone(fields.phone);
+
+        if (!/^[6-9]\d{9}$/.test(normalizedPhone)) {
+            const error = new Error("Enter a valid 10-digit phone number.");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        updatePayload.phone = normalizedPhone;
+    }
     if (fields.address !== undefined) updatePayload.address = normalizeText(fields.address);
     if (fields.city !== undefined) updatePayload.city = normalizeText(fields.city);
     if (fields.productSize !== undefined) updatePayload.productSize = normalizeText(fields.productSize);
@@ -605,6 +658,15 @@ export async function updateSubmission(id, fields) {
         const error = new Error("productPrice must be greater than or equal to advanceAmount.");
         error.statusCode = 400;
         throw error;
+    }
+
+    const finalStatus = updatePayload.status !== undefined ? updatePayload.status : normalizeOrderStatus(existing.status);
+    const finalCodAmount = calculateCodAmount(finalPrice, finalAdvance);
+
+    if (finalStatus === "delivered") {
+        updatePayload.codReceivedAmount = finalCodAmount ?? 0;
+    } else if (fields.status !== undefined) {
+        updatePayload.codReceivedAmount = 0;
     }
 
     const { data, error } = await supabase

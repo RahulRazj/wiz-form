@@ -264,6 +264,30 @@ export default function App() {
   const isAdminDashboardRoute = pathname === "/admin/dashboard" || isLegacyDashboardRoute;
   const isAdminManageRoute = pathname === "/admin/manage";
   const isAdminUnlocked = adminTokenStatus === "valid";
+  const emptyStatsBucket = {
+    count: 0,
+    pricedCount: 0,
+    advanceReceived: 0,
+    totalSales: 0,
+    pendingCod: 0,
+    statusBreakdown: { pending: 0, placed: 0, created: 0, dispatched: 0, delivered: 0, exchange: 0, cancelled: 0 },
+    statusCountBreakdown: { pending: 0, placed: 0, created: 0, dispatched: 0, delivered: 0, exchange: 0, cancelled: 0 }
+  };
+  const normalizeStatsBucket = (bucket) => ({
+    ...emptyStatsBucket,
+    ...bucket,
+    statusBreakdown: {
+      ...emptyStatsBucket.statusBreakdown,
+      ...bucket?.statusBreakdown
+    },
+    statusCountBreakdown: {
+      ...emptyStatsBucket.statusCountBreakdown,
+      ...bucket?.statusCountBreakdown
+    }
+  });
+  const getStatsBucket = (rangeKey) => normalizeStatsBucket(dashboardStats?.ranges?.[rangeKey]);
+  const selectedStatsBucket = getStatsBucket(selectedStatsRange);
+  const allTimeStatsBucket = getStatsBucket("allTime");
 
   useEffect(() => {
     productImagesRef.current = productImages;
@@ -302,10 +326,6 @@ export default function App() {
   }, [isLegacyDashboardRoute]);
 
   useEffect(() => {
-    if (isAdminRoute) {
-      return undefined;
-    }
-
     const controller = new AbortController();
 
     async function loadBranches() {
@@ -339,7 +359,7 @@ export default function App() {
     return () => {
       controller.abort();
     };
-  }, [isAdminRoute]);
+  }, []);
 
   function navigate(to) {
     if (window.location.pathname !== to) {
@@ -659,6 +679,7 @@ export default function App() {
 
     const name = editNameDraft.trim();
     const phone = editPhoneDraft.trim();
+    const normalizedPhone = phone.replace(/\D/g, "");
     const address = editAddressDraft.trim();
     const city = editCityDraft.trim();
     const advanceAmount = Number(editAdvanceDraft);
@@ -669,6 +690,11 @@ export default function App() {
 
     if (!name || !phone || !address || !city) {
       setStatusUpdateError("Name, Phone, Address, and City are required.");
+      return;
+    }
+
+    if (!/^[6-9]\d{9}$/.test(normalizedPhone)) {
+      setStatusUpdateError("Enter a valid 10-digit phone number.");
       return;
     }
 
@@ -697,7 +723,7 @@ export default function App() {
           headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
           body: JSON.stringify({
             name,
-            phone,
+            phone: normalizedPhone,
             address,
             city,
             advanceAmount,
@@ -1231,9 +1257,9 @@ export default function App() {
                     onClick={() => setSelectedStatsRange(option.key)}
                   >
                     <span className="stats-card-label">{option.label}</span>
-                    <strong className="stats-card-value">{dashboardStats.ranges[option.key].count}</strong>
+                    <strong className="stats-card-value">{getStatsBucket(option.key).count}</strong>
                     <span className="stats-card-sub">
-                      {formatCurrency(dashboardStats.ranges[option.key].advanceReceived)}
+                      {formatCurrency(getStatsBucket(option.key).advanceReceived)}
                     </span>
                   </button>
                 ))}
@@ -1242,15 +1268,15 @@ export default function App() {
               <div className="stats-overview-row">
                 <div className="stats-overview-item">
                   <span>Total Sales</span>
-                  <strong>{formatCurrency(dashboardStats.ranges[selectedStatsRange].totalSales)}</strong>
+                  <strong>{formatCurrency(selectedStatsBucket.totalSales)}</strong>
                 </div>
                 <div className="stats-overview-item">
                   <span>Advance Received</span>
-                  <strong>{formatCurrency(dashboardStats.ranges[selectedStatsRange].advanceReceived)}</strong>
+                  <strong>{formatCurrency(selectedStatsBucket.advanceReceived)}</strong>
                 </div>
                 <div className="stats-overview-item">
                   <span>Pending COD</span>
-                  <strong>{formatCurrency(dashboardStats.ranges[selectedStatsRange].pendingCod)}</strong>
+                  <strong>{formatCurrency(selectedStatsBucket.pendingCod)}</strong>
                 </div>
               </div>
 
@@ -1261,29 +1287,60 @@ export default function App() {
                     {STATS_RANGE_OPTIONS.find((option) => option.key === selectedStatsRange)?.label}
                   </span>
 
+                  <div className="stats-breakdown-header-row">
+                    <span />
+                    <span>Qty</span>
+                    <span>Total Price</span>
+                  </div>
+
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-pending">PENDING</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.pending}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.pending ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.pending ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-placed">PLACED</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.placed}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.placed ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.placed ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-created">CREATED</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.created}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.created ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.created ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-dispatched">DISPATCHED</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.dispatched}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.dispatched ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.dispatched ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-delivered">DELIVERED</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.delivered}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.delivered ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.delivered ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-exchange">EXCHANGE</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.exchange}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.exchange ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.exchange ?? 0)}</strong>
+                    </div>
+                  </div>
+                  <div className="stats-breakdown-row">
+                    <span className="status-pill status-pill-cancelled">CANCELLED</span>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.cancelled ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.cancelled ?? 0)}</strong>
+                    </div>
                   </div>
                 </div>
 
@@ -1306,12 +1363,12 @@ export default function App() {
                   <div>
                     <span className="submission-inspector-section-title">Remaining COD (Cash on Delivery)</span>
                     <p className="dashboard-header-hint">
-                      Total dues still owed across {dashboardStats.ranges.allTime.pricedCount} priced order
-                      {dashboardStats.ranges.allTime.pricedCount === 1 ? "" : "s"}.
+                      Total dues still owed across {allTimeStatsBucket.pricedCount} priced order
+                      {allTimeStatsBucket.pricedCount === 1 ? "" : "s"}.
                     </p>
                   </div>
                   <strong className="stats-cod-total">
-                    {formatCurrency(dashboardStats.ranges.allTime.pendingCod)}
+                    {formatCurrency(allTimeStatsBucket.pendingCod)}
                   </strong>
                 </div>
 
@@ -1890,11 +1947,13 @@ export default function App() {
                   </label>
                   <label className="edit-order-field">
                     <span>City</span>
-                    <input
-                      type="text"
-                      className="edit-order-input"
+                    <CityCombobox
+                      id="edit-city"
                       value={editCityDraft}
-                      onChange={(e) => setEditCityDraft(e.target.value)}
+                      onChange={setEditCityDraft}
+                      options={branches}
+                      loading={branchesLoading}
+                      error={branchesError}
                     />
                   </label>
                   <label className="edit-order-field">

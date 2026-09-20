@@ -443,6 +443,50 @@ body {
   margin-top: 12px;
 }
 
+.stats-breakdown-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 140px;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 0 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stats-breakdown-header-row span:last-child {
+  text-align: right;
+}
+
+.stats-breakdown-values {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+}
+
+.stats-breakdown-values-inline {
+  display: grid;
+  grid-template-columns: 72px 140px;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  min-width: 0;
+}
+
+.stats-breakdown-values strong {
+  font-size: 15px;
+  line-height: 1.15;
+}
+
+.stats-breakdown-values-inline strong:last-child {
+  text-align: right;
+}
+
 .stats-cod-card {
   margin-top: 14px;
   padding: 16px;
