@@ -31,13 +31,13 @@ app.use(errorHandler);
 
 function startImageCleanupTimer() {
     if (!IMAGE_CLEANUP_RETENTION_DAYS || IMAGE_CLEANUP_RETENTION_DAYS <= 0) {
-        console.log("Image cleanup disabled (set IMAGE_CLEANUP_RETENTION_DAYS in server/.env to enable).");
+        console.info("Image cleanup disabled (set IMAGE_CLEANUP_RETENTION_DAYS in server/.env to enable).");
         return;
     }
 
     const intervalMs = Math.max(IMAGE_CLEANUP_INTERVAL_DAYS, 1) * 24 * 60 * 60 * 1000;
 
-    console.log(
+    console.info(
         `Image cleanup enabled: removing images older than ${IMAGE_CLEANUP_RETENTION_DAYS} day(s), checking every ${IMAGE_CLEANUP_INTERVAL_DAYS} day(s).`
     );
 

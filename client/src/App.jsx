@@ -4,7 +4,7 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const MAX_PRODUCT_IMAGES = 5;
 const PRODUCT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/avif"];
 const RECEIPT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/avif", "application/pdf"];
-const ORDER_STATUS_OPTIONS = ["pending", "placed", "created", "dispatched", "delivered", "exchange"];
+const ORDER_STATUS_OPTIONS = ["pending", "placed", "created", "dispatched", "delivered", "exchange", "cancelled"];
 const STATS_RANGE_OPTIONS = [
   { key: "today", label: "Today" },
   { key: "week", label: "This Week" },
@@ -61,7 +61,7 @@ function formatDateTime(value) {
     return "—";
   }
 
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleDateString();
 }
 
 function formatCurrency(value) {
@@ -92,6 +92,50 @@ function getSubmissionReceiptImage(submission) {
 
 function isReceiptImageUrl(url) {
   return Boolean(url) && !/\.pdf($|\?)/i.test(url);
+}
+
+function ViewIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4 20h4l10.5-10.5a1.7 1.7 0 0 0 0-2.4l-1.6-1.6a1.7 1.7 0 0 0-2.4 0L4 16v4Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="m13.5 6.5 4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4.5 6h15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M9 6V4.8A1.8 1.8 0 0 1 10.8 3h2.4A1.8 1.8 0 0 1 15 4.8V6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M7.5 6.5h9l-.6 12.2a1.6 1.6 0 0 1-1.6 1.5H9.7a1.6 1.6 0 0 1-1.6-1.5L7.5 6.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M10.5 10v5.5M13.5 10v5.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ActionIconButton({ title, ariaLabel, className = "", onClick, disabled = false, children }) {
+  return (
+    <button
+      type="button"
+      className={`manage-icon-button ${className}`.trim()}
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={ariaLabel}
+    >
+      {children}
+    </button>
+  );
 }
 
 const ADMIN_TOKEN_STORAGE_KEY = "adminToken";
@@ -158,7 +202,16 @@ export default function App() {
   const [selectedSubmission, setSelectedSubmission] = useState(null);
   const [selectedImageUrl, setSelectedImageUrl] = useState("");
   const [viewSubmission, setViewSubmission] = useState(null);
+  const [isEditingMode, setIsEditingMode] = useState(false);
+  const [editNameDraft, setEditNameDraft] = useState("");
+  const [editPhoneDraft, setEditPhoneDraft] = useState("");
+  const [editAddressDraft, setEditAddressDraft] = useState("");
+  const [editCityDraft, setEditCityDraft] = useState("");
+  const [editAdvanceDraft, setEditAdvanceDraft] = useState("");
+  const [editSizeDraft, setEditSizeDraft] = useState("");
+  const [editTrackingDraft, setEditTrackingDraft] = useState("");
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+  const [isDeletingOrder, setIsDeletingOrder] = useState(false);
   const [statusUpdateError, setStatusUpdateError] = useState("");
   const [orderPriceDraft, setOrderPriceDraft] = useState("");
   const [orderStatusDraft, setOrderStatusDraft] = useState("");
@@ -173,6 +226,15 @@ export default function App() {
   const [codSearchResults, setCodSearchResults] = useState(null);
   const [codSearchLoading, setCodSearchLoading] = useState(false);
   const [codSearchError, setCodSearchError] = useState("");
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: null,
+    confirmText: "Confirm",
+    cancelText: "Cancel",
+    isDanger: false
+  });
   const [adminToken, setAdminToken] = useState(() => {
     try {
       return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
@@ -202,6 +264,30 @@ export default function App() {
   const isAdminDashboardRoute = pathname === "/admin/dashboard" || isLegacyDashboardRoute;
   const isAdminManageRoute = pathname === "/admin/manage";
   const isAdminUnlocked = adminTokenStatus === "valid";
+  const emptyStatsBucket = {
+    count: 0,
+    pricedCount: 0,
+    advanceReceived: 0,
+    totalSales: 0,
+    pendingCod: 0,
+    statusBreakdown: { pending: 0, placed: 0, created: 0, dispatched: 0, delivered: 0, exchange: 0, cancelled: 0 },
+    statusCountBreakdown: { pending: 0, placed: 0, created: 0, dispatched: 0, delivered: 0, exchange: 0, cancelled: 0 }
+  };
+  const normalizeStatsBucket = (bucket) => ({
+    ...emptyStatsBucket,
+    ...bucket,
+    statusBreakdown: {
+      ...emptyStatsBucket.statusBreakdown,
+      ...bucket?.statusBreakdown
+    },
+    statusCountBreakdown: {
+      ...emptyStatsBucket.statusCountBreakdown,
+      ...bucket?.statusCountBreakdown
+    }
+  });
+  const getStatsBucket = (rangeKey) => normalizeStatsBucket(dashboardStats?.ranges?.[rangeKey]);
+  const selectedStatsBucket = getStatsBucket(selectedStatsRange);
+  const allTimeStatsBucket = getStatsBucket("allTime");
 
   useEffect(() => {
     productImagesRef.current = productImages;
@@ -240,10 +326,6 @@ export default function App() {
   }, [isLegacyDashboardRoute]);
 
   useEffect(() => {
-    if (isAdminRoute) {
-      return undefined;
-    }
-
     const controller = new AbortController();
 
     async function loadBranches() {
@@ -277,7 +359,7 @@ export default function App() {
     return () => {
       controller.abort();
     };
-  }, [isAdminRoute]);
+  }, []);
 
   function navigate(to) {
     if (window.location.pathname !== to) {
@@ -512,10 +594,18 @@ export default function App() {
     };
   }, [isAdminDashboardRoute, isAdminUnlocked, adminToken]);
 
-  function openSubmissionView(submission) {
+  function openSubmissionView(submission, startInEditMode = false) {
     setStatusUpdateError("");
     setOrderPriceDraft(submission.productPrice != null ? String(submission.productPrice) : "");
     setOrderStatusDraft(submission.status || "placed");
+    setEditNameDraft(submission.name || "");
+    setEditPhoneDraft(submission.phone || "");
+    setEditAddressDraft(submission.address || "");
+    setEditCityDraft(submission.city || "");
+    setEditAdvanceDraft(submission.advanceAmount != null ? String(submission.advanceAmount) : "0");
+    setEditSizeDraft(submission.productSize || "");
+    setEditTrackingDraft(submission.trackingId || "");
+    setIsEditingMode(startInEditMode);
     setViewSubmission(submission);
   }
 
@@ -524,6 +614,7 @@ export default function App() {
     setStatusUpdateError("");
     setOrderPriceDraft("");
     setOrderStatusDraft("");
+    setIsEditingMode(false);
   }
 
   function applySubmissionUpdate(updatedSubmission) {
@@ -578,6 +669,152 @@ export default function App() {
     } finally {
       setIsUpdatingStatus(false);
     }
+  }
+
+  async function handleSaveEditedDetails() {
+    if ((viewSubmission.status || "").toLowerCase() === "delivered") {
+      setStatusUpdateError("Delivered orders cannot be edited.");
+      return;
+    }
+
+    const name = editNameDraft.trim();
+    const phone = editPhoneDraft.trim();
+    const normalizedPhone = phone.replace(/\D/g, "");
+    const address = editAddressDraft.trim();
+    const city = editCityDraft.trim();
+    const advanceAmount = Number(editAdvanceDraft);
+    const productPrice = orderPriceDraft.trim() !== "" ? Number(orderPriceDraft) : null;
+    const productSize = editSizeDraft.trim();
+    const trackingId = editTrackingDraft.trim();
+    const status = orderStatusDraft;
+
+    if (!name || !phone || !address || !city) {
+      setStatusUpdateError("Name, Phone, Address, and City are required.");
+      return;
+    }
+
+    if (!/^[6-9]\d{9}$/.test(normalizedPhone)) {
+      setStatusUpdateError("Enter a valid 10-digit phone number.");
+      return;
+    }
+
+    if (!Number.isFinite(advanceAmount) || advanceAmount < 0) {
+      setStatusUpdateError("Please enter a valid advance amount.");
+      return;
+    }
+
+    if (productPrice !== null && (!Number.isFinite(productPrice) || productPrice <= 0)) {
+      setStatusUpdateError("Please enter a valid product price.");
+      return;
+    }
+
+    if (productPrice !== null && productPrice < advanceAmount) {
+      setStatusUpdateError("Product price must be greater than or equal to advance amount.");
+      return;
+    }
+
+    const performSave = async () => {
+      try {
+        setIsUpdatingStatus(true);
+        setStatusUpdateError("");
+
+        const response = await fetch(apiUrl(`/api/submissions/${viewSubmission.id}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
+          body: JSON.stringify({
+            name,
+            phone: normalizedPhone,
+            address,
+            city,
+            advanceAmount,
+            productPrice,
+            productSize,
+            trackingId,
+            status
+          })
+        });
+
+        const responseBody = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(responseBody.error || responseBody.message || "Failed to update the order.");
+        }
+
+        applySubmissionUpdate(responseBody.data);
+        setIsEditingMode(false);
+      } catch (error) {
+        setStatusUpdateError(
+          error instanceof Error && error.message ? error.message : "Failed to update the order."
+        );
+      } finally {
+        setIsUpdatingStatus(false);
+        setConfirmModal({ isOpen: false, title: "", message: "", onConfirm: null, confirmText: "Confirm", cancelText: "Cancel", isDanger: false });
+      }
+    };
+
+    setConfirmModal({
+      isOpen: true,
+      title: "Confirm Edit",
+      message: `Are you sure you want to save changes for order ${viewSubmission.orderId || `id ${viewSubmission.id}`}?`,
+      confirmText: "Save Changes",
+      cancelText: "Cancel",
+      isDanger: false,
+      onConfirm: performSave
+    });
+  }
+
+  async function handleDeleteOrder(submission) {
+    if ((submission.status || "").toLowerCase() === "delivered") {
+      alert("Delivered orders cannot be deleted.");
+      return;
+    }
+
+    const label = submission.orderId || `id ${submission.id}`;
+
+    const performDelete = async () => {
+      try {
+        setIsDeletingOrder(true);
+
+        const response = await fetch(apiUrl(`/api/submissions/${submission.id}`), {
+          method: "DELETE",
+          headers: { "X-Admin-Token": adminToken }
+        });
+
+        const responseBody = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(responseBody.error || responseBody.message || "Failed to delete the order.");
+        }
+
+        if (viewSubmission && viewSubmission.id === submission.id) {
+          closeSubmissionView();
+        }
+
+        setSubmissions((current) => current.filter((item) => item.id !== submission.id));
+        
+        setAdminPagination((current) => ({
+          ...current,
+          total: Math.max(0, current.total - 1)
+        }));
+
+        alert(`Order ${label} deleted successfully.`);
+      } catch (error) {
+        alert(error instanceof Error && error.message ? error.message : "Failed to delete the order.");
+      } finally {
+        setIsDeletingOrder(false);
+        setConfirmModal({ isOpen: false, title: "", message: "", onConfirm: null, confirmText: "Confirm", cancelText: "Cancel", isDanger: false });
+      }
+    };
+
+    setConfirmModal({
+      isOpen: true,
+      title: "Confirm Delete",
+      message: `Are you sure you want to permanently delete order ${label}? This will delete the database record and all associated images.`,
+      confirmText: "Delete Order",
+      cancelText: "Cancel",
+      isDanger: true,
+      onConfirm: performDelete
+    });
   }
 
   async function handleCodSearch(event) {
@@ -1020,9 +1257,9 @@ export default function App() {
                     onClick={() => setSelectedStatsRange(option.key)}
                   >
                     <span className="stats-card-label">{option.label}</span>
-                    <strong className="stats-card-value">{dashboardStats.ranges[option.key].count}</strong>
+                    <strong className="stats-card-value">{getStatsBucket(option.key).count}</strong>
                     <span className="stats-card-sub">
-                      {formatCurrency(dashboardStats.ranges[option.key].advanceReceived)}
+                      {formatCurrency(getStatsBucket(option.key).advanceReceived)}
                     </span>
                   </button>
                 ))}
@@ -1031,15 +1268,15 @@ export default function App() {
               <div className="stats-overview-row">
                 <div className="stats-overview-item">
                   <span>Total Sales</span>
-                  <strong>{formatCurrency(dashboardStats.ranges[selectedStatsRange].totalSales)}</strong>
+                  <strong>{formatCurrency(selectedStatsBucket.totalSales)}</strong>
                 </div>
                 <div className="stats-overview-item">
                   <span>Advance Received</span>
-                  <strong>{formatCurrency(dashboardStats.ranges[selectedStatsRange].advanceReceived)}</strong>
+                  <strong>{formatCurrency(selectedStatsBucket.advanceReceived)}</strong>
                 </div>
                 <div className="stats-overview-item">
                   <span>Pending COD</span>
-                  <strong>{formatCurrency(dashboardStats.ranges[selectedStatsRange].pendingCod)}</strong>
+                  <strong>{formatCurrency(selectedStatsBucket.pendingCod)}</strong>
                 </div>
               </div>
 
@@ -1050,29 +1287,60 @@ export default function App() {
                     {STATS_RANGE_OPTIONS.find((option) => option.key === selectedStatsRange)?.label}
                   </span>
 
+                  <div className="stats-breakdown-header-row">
+                    <span />
+                    <span>Qty</span>
+                    <span>Total Price</span>
+                  </div>
+
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-pending">PENDING</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.pending}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.pending ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.pending ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-placed">PLACED</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.placed}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.placed ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.placed ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-created">CREATED</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.created}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.created ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.created ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-dispatched">DISPATCHED</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.dispatched}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.dispatched ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.dispatched ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-delivered">DELIVERED</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.delivered}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.delivered ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.delivered ?? 0)}</strong>
+                    </div>
                   </div>
                   <div className="stats-breakdown-row">
                     <span className="status-pill status-pill-exchange">EXCHANGE</span>
-                    <strong>{dashboardStats.ranges[selectedStatsRange].statusBreakdown.exchange}</strong>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.exchange ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.exchange ?? 0)}</strong>
+                    </div>
+                  </div>
+                  <div className="stats-breakdown-row">
+                    <span className="status-pill status-pill-cancelled">CANCELLED</span>
+                    <div className="stats-breakdown-values stats-breakdown-values-inline">
+                      <strong>{selectedStatsBucket.statusCountBreakdown.cancelled ?? 0}</strong>
+                      <strong>{formatCurrency(selectedStatsBucket.statusBreakdown.cancelled ?? 0)}</strong>
+                    </div>
                   </div>
                 </div>
 
@@ -1095,12 +1363,12 @@ export default function App() {
                   <div>
                     <span className="submission-inspector-section-title">Remaining COD (Cash on Delivery)</span>
                     <p className="dashboard-header-hint">
-                      Total dues still owed across {dashboardStats.ranges.allTime.pricedCount} priced order
-                      {dashboardStats.ranges.allTime.pricedCount === 1 ? "" : "s"}.
+                      Total dues still owed across {allTimeStatsBucket.pricedCount} priced order
+                      {allTimeStatsBucket.pricedCount === 1 ? "" : "s"}.
                     </p>
                   </div>
                   <strong className="stats-cod-total">
-                    {formatCurrency(dashboardStats.ranges.allTime.pendingCod)}
+                    {formatCurrency(allTimeStatsBucket.pendingCod)}
                   </strong>
                 </div>
 
@@ -1175,7 +1443,10 @@ export default function App() {
           <div className="dashboard-header">
             <div>
               <h2>{isAdminManageRoute ? "Manage Orders" : "Order Submissions"}</h2>
-              {isAdminManageRoute ? (
+            </div>
+
+            {isAdminManageRoute ? (
+              <div className="dashboard-header-actions">
                 <div className="manage-cleanup">
                   <button
                     type="button"
@@ -1188,7 +1459,8 @@ export default function App() {
                   {cleanupMessage ? <p className="dashboard-state">{cleanupMessage}</p> : null}
                   {cleanupError ? <p className="dashboard-state dashboard-state-error">{cleanupError}</p> : null}
                 </div>
-              ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="dashboard-summary">
@@ -1207,7 +1479,6 @@ export default function App() {
               <span>Shown</span>
             </div>
           </div>
-        </div>
 
         <div className="dashboard-filters">
           <div className="dashboard-filters-row dashboard-filters-row-single">
@@ -1247,6 +1518,7 @@ export default function App() {
                   setAdminPage(1);
                   setAdminStatusFilter(event.target.value);
                 }}
+                className={`status-select-${adminStatusFilter}`}
               >
                 <option value="all">All</option>
                 {ORDER_STATUS_OPTIONS.map((status) => (
@@ -1310,69 +1582,103 @@ export default function App() {
             {submissions.map((submission) => {
               const productImagesForSubmission = getSubmissionProductImages(submission);
               const receiptUrl = getSubmissionReceiptImage(submission);
+              const orderDate = formatDateTime(submission.created_at);
 
               return (
                 <article className="manage-item" key={`manage-${submission.orderId || submission.id}`}>
                   <div className="manage-item-header">
-                    <div>
-                      <strong>{submission.orderId || "—"}</strong>
-                      <p>{submission.name || "—"}</p>
+                    <div className="manage-item-title">
+                      <strong className="manage-item-order-id">{submission.orderId || "—"}</strong>
+
+                      <div className="manage-item-status-group">
+                        <span className={`status-pill status-pill-${submission.status || "placed"}`}>
+                          {(submission.status || "placed").toUpperCase()}
+                        </span>
+
+                        <span className={`receipt-pill ${receiptUrl ? "receipt-pill-ok" : "receipt-pill-missing"}`}>
+                          {receiptUrl ? "Receipt" : "No receipt"}
+                        </span>
+                      </div>
+
+                      <div className="manage-item-customer">
+                        <strong>{submission.name || "—"}</strong>
+                        <span>{submission.phone || "—"}</span>
+                      </div>
                     </div>
 
-                    <div className="manage-item-badges">
-                      <span className={`status-pill status-pill-${submission.status || "placed"}`}>
-                        {(submission.status || "placed").toUpperCase()}
-                      </span>
+                    <div className="manage-item-actions" aria-label="Order actions">
+                      <ActionIconButton
+                        title="View order"
+                        ariaLabel="View order"
+                        className="manage-icon-button-view"
+                        onClick={() => openSubmissionView(submission)}
+                      >
+                        <ViewIcon />
+                      </ActionIconButton>
 
-                      <span className={`receipt-pill ${receiptUrl ? "receipt-pill-ok" : "receipt-pill-missing"}`}>
-                        {receiptUrl ? "Receipt" : "No receipt"}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="manage-item-gallery">
-                    {productImagesForSubmission.length > 0 ? (
-                      productImagesForSubmission.slice(0, 3).map((imageUrl, index) => (
-                        <button
-                          type="button"
-                          key={`${submission.orderId || submission.id}-${index}-${imageUrl}`}
-                          className="manage-thumb-button"
-                          onClick={() => setSelectedImageUrl(imageUrl)}
+                      {(submission.status || "").toLowerCase() !== "delivered" && (
+                        <ActionIconButton
+                          title="Edit order"
+                          ariaLabel="Edit order"
+                          className="manage-icon-button-edit"
+                          onClick={() => openSubmissionView(submission, true)}
                         >
-                          <img src={imageUrl} alt={`Preview ${index + 1}`} loading="lazy" />
-                        </button>
-                      ))
-                    ) : (
-                      <div className="submission-preview-empty">No product images.</div>
-                    )}
+                          <EditIcon />
+                        </ActionIconButton>
+                      )}
+
+                      <ActionIconButton
+                        title="Delete order"
+                        ariaLabel="Delete order"
+                        className="manage-icon-button-delete"
+                        onClick={() => handleDeleteOrder(submission)}
+                        disabled={isDeletingOrder}
+                      >
+                        <TrashIcon />
+                      </ActionIconButton>
+                    </div>
                   </div>
 
-                  <div className="manage-item-meta">
+                  <div className="manage-item-details">
                     <div>
-                      <span>City</span>
-                      <strong>{submission.city || "—"}</strong>
+                      <span>Order Date</span>
+                      <strong>{orderDate}</strong>
                     </div>
                     <div>
-                      <span>Advance</span>
-                      <strong>{formatCurrency(submission.advanceAmount)}</strong>
+                      <span>Total Amount</span>
+                      <strong>{formatCurrency(submission.productPrice)}</strong>
                     </div>
                     <div>
                       <span>Tracking ID</span>
                       <strong>{submission.trackingId || "—"}</strong>
                     </div>
-                    <div>
-                      <span>Created</span>
-                      <strong>{formatDateTime(submission.created_at)}</strong>
-                    </div>
                   </div>
 
-                  <button
-                    type="button"
-                    className="secondary-button compact-button"
-                    onClick={() => openSubmissionView(submission)}
-                  >
-                    View
-                  </button>
+                  <div className="manage-item-footer">
+                    <div className="manage-item-gallery">
+                      {productImagesForSubmission.length > 0 ? (
+                        productImagesForSubmission.slice(0, 3).map((imageUrl, index) => (
+                          <button
+                            type="button"
+                            key={`${submission.orderId || submission.id}-${index}-${imageUrl}`}
+                            className="manage-thumb-button"
+                            onClick={() => setSelectedImageUrl(imageUrl)}
+                            title={`Open image ${index + 1}`}
+                            aria-label={`Open image ${index + 1}`}
+                          >
+                            <img src={imageUrl} alt={`Preview ${index + 1}`} loading="lazy" />
+                          </button>
+                        ))
+                      ) : (
+                        <div className="submission-preview-empty">No product images.</div>
+                      )}
+                    </div>
+
+                    <div className="manage-item-secondary">
+                      <span>{submission.trackingId ? `Tracking #${submission.trackingId}` : "Tracking ID hidden"}</span>
+                      <span>{receiptUrl ? "Receipt attached" : "No receipt uploaded"}</span>
+                    </div>
+                  </div>
                 </article>
               );
             })}
@@ -1382,9 +1688,10 @@ export default function App() {
             <table className="dashboard-table">
               <thead>
                 <tr>
+                  <th>Order</th>
                   <th>Customer</th>
                   <th>Location</th>
-                  <th>Advance Paid</th>
+                  <th>Price</th>
                   <th>Images</th>
                   <th>Receipt</th>
                   <th>Status</th>
@@ -1406,6 +1713,12 @@ export default function App() {
                     >
                       <td>
                         <div className="dashboard-stacked-detail">
+                          <strong>{submission.orderId || "—"}</strong>
+                          <span>TC: { submission.trackingId ? `#${submission.trackingId}` : "—"}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="dashboard-stacked-detail">
                           <strong>{submission.name || "—"}</strong>
                           <span>{submission.phone || "—"}</span>
                         </div>
@@ -1416,7 +1729,12 @@ export default function App() {
                           <span>{submission.address || "—"}</span>
                         </div>
                       </td>
-                      <td>{formatCurrency(submission.advanceAmount)}</td>
+                      <td>
+                        <div className="dashboard-stacked-detail">
+                          <span>Adv: {formatCurrency(submission.advanceAmount)}</span>
+                          <span>Price: {submission.productPrice != null ? formatCurrency(submission.productPrice) : "—"}</span>
+                        </div>
+                      </td>
                       <td>
                         {productImagesForSubmission.length > 0 ? (
                           <span className="image-stack">
@@ -1607,92 +1925,163 @@ export default function App() {
             </div>
 
             <div className="submission-detail-modal-body">
-              <div className="submission-meta-grid">
-                <div>
-                  <span>Customer</span>
-                  <strong>{viewSubmission.name || "—"}</strong>
-                </div>
-                <div>
-                  <span>Phone</span>
-                  <strong>{viewSubmission.phone || "—"}</strong>
-                </div>
-                <div>
-                  <span>City</span>
-                  <strong>{viewSubmission.city || "—"}</strong>
-                </div>
-                <div>
-                  <span>Advance Paid</span>
-                  <strong>{formatCurrency(viewSubmission.advanceAmount)}</strong>
-                </div>
-                {viewSubmission.productSize ? (
-                  <div>
+              {isEditingMode ? (
+                <div className="edit-order-form-grid">
+                  <label className="edit-order-field">
+                    <span>Customer Name</span>
+                    <input
+                      type="text"
+                      className="edit-order-input"
+                      value={editNameDraft}
+                      onChange={(e) => setEditNameDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field">
+                    <span>Phone</span>
+                    <input
+                      type="text"
+                      className="edit-order-input"
+                      value={editPhoneDraft}
+                      onChange={(e) => setEditPhoneDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field">
+                    <span>City</span>
+                    <CityCombobox
+                      id="edit-city"
+                      value={editCityDraft}
+                      onChange={setEditCityDraft}
+                      options={branches}
+                      loading={branchesLoading}
+                      error={branchesError}
+                    />
+                  </label>
+                  <label className="edit-order-field">
+                    <span>Advance Paid</span>
+                    <input
+                      type="number"
+                      className="edit-order-input"
+                      value={editAdvanceDraft}
+                      onChange={(e) => setEditAdvanceDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field">
                     <span>Size</span>
-                    <strong>{viewSubmission.productSize}</strong>
-                  </div>
-                ) : null}
-                {viewSubmission.trackingId ? (
-                  <div>
+                    <input
+                      type="text"
+                      className="edit-order-input"
+                      value={editSizeDraft}
+                      onChange={(e) => setEditSizeDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field">
                     <span>Tracking ID</span>
-                    <strong>{viewSubmission.trackingId}</strong>
+                    <input
+                      type="text"
+                      className="edit-order-input"
+                      value={editTrackingDraft}
+                      onChange={(e) => setEditTrackingDraft(e.target.value)}
+                    />
+                  </label>
+                  <label className="edit-order-field edit-order-field-full">
+                    <span>Address</span>
+                    <textarea
+                      className="edit-order-textarea"
+                      value={editAddressDraft}
+                      onChange={(e) => setEditAddressDraft(e.target.value)}
+                    />
+                  </label>
+                </div>
+              ) : (
+                <>
+                  <div className="submission-meta-grid">
+                    <div>
+                      <span>Customer</span>
+                      <strong>{viewSubmission.name || "—"}</strong>
+                    </div>
+                    <div>
+                      <span>Phone</span>
+                      <strong>{viewSubmission.phone || "—"}</strong>
+                    </div>
+                    <div>
+                      <span>City</span>
+                      <strong>{viewSubmission.city || "—"}</strong>
+                    </div>
+                    <div>
+                      <span>Advance Paid</span>
+                      <strong>{formatCurrency(viewSubmission.advanceAmount)}</strong>
+                    </div>
+                    {viewSubmission.productSize ? (
+                      <div>
+                        <span>Size</span>
+                        <strong>{viewSubmission.productSize}</strong>
+                      </div>
+                    ) : null}
+                    {viewSubmission.trackingId ? (
+                      <div>
+                        <span>Tracking ID</span>
+                        <strong>{viewSubmission.trackingId}</strong>
+                      </div>
+                    ) : null}
+                    {viewSubmission.productPrice != null ? (
+                      <>
+                        <div>
+                          <span>Price</span>
+                          <strong>{formatCurrency(viewSubmission.productPrice)}</strong>
+                        </div>
+                        <div>
+                          <span>Remaining COD</span>
+                          <strong>{formatCurrency(viewSubmission.remainingCod)}</strong>
+                        </div>
+                      </>
+                    ) : null}
                   </div>
-                ) : null}
-                {viewSubmission.productPrice != null ? (
-                  <>
-                    <div>
-                      <span>Price</span>
-                      <strong>{formatCurrency(viewSubmission.productPrice)}</strong>
-                    </div>
-                    <div>
-                      <span>Remaining COD</span>
-                      <strong>{formatCurrency(viewSubmission.remainingCod)}</strong>
-                    </div>
-                  </>
-                ) : null}
-              </div>
 
-              <p className="submission-address">{viewSubmission.address || "No address provided."}</p>
+                  <p className="submission-address">{viewSubmission.address || "No address provided."}</p>
 
-              <div className="submission-image-grid">
-                {getSubmissionProductImages(viewSubmission).map((imageUrl, index) => (
-                  <a
-                    key={`view-${viewSubmission.orderId || viewSubmission.id}-${imageUrl}`}
-                    href={imageUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="submission-image-button"
-                  >
-                    <img src={imageUrl} alt={`Submission image ${index + 1}`} loading="lazy" />
-                  </a>
-                ))}
-              </div>
+                  <div className="submission-image-grid">
+                    {getSubmissionProductImages(viewSubmission).map((imageUrl, index) => (
+                      <a
+                        key={`view-${viewSubmission.orderId || viewSubmission.id}-${imageUrl}`}
+                        href={imageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="submission-image-button"
+                      >
+                        <img src={imageUrl} alt={`Submission image ${index + 1}`} loading="lazy" />
+                      </a>
+                    ))}
+                  </div>
 
-              <div className="submission-receipt-section">
-                <span className="submission-inspector-section-title">Receipt</span>
+                  <div className="submission-receipt-section">
+                    <span className="submission-inspector-section-title">Receipt</span>
 
-                {getSubmissionReceiptImage(viewSubmission) ? (
-                  isReceiptImageUrl(getSubmissionReceiptImage(viewSubmission)) ? (
-                    <button
-                      type="button"
-                      className="submission-image-button submission-receipt-preview"
-                      onClick={() => setSelectedImageUrl(getSubmissionReceiptImage(viewSubmission))}
-                    >
-                      <img src={getSubmissionReceiptImage(viewSubmission)} alt="Receipt preview" loading="lazy" />
-                    </button>
-                  ) : (
-                    <a
-                      className="submission-receipt-file"
-                      href={getSubmissionReceiptImage(viewSubmission)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <span style={{ fontSize: 28 }}>📄</span>
-                      Open receipt (PDF)
-                    </a>
-                  )
-                ) : (
-                  <span className="dashboard-empty-cell">No receipt attached.</span>
-                )}
-              </div>
+                    {getSubmissionReceiptImage(viewSubmission) ? (
+                      isReceiptImageUrl(getSubmissionReceiptImage(viewSubmission)) ? (
+                        <button
+                          type="button"
+                          className="submission-image-button submission-receipt-preview"
+                          onClick={() => setSelectedImageUrl(getSubmissionReceiptImage(viewSubmission))}
+                        >
+                          <img src={getSubmissionReceiptImage(viewSubmission)} alt="Receipt preview" loading="lazy" />
+                        </button>
+                      ) : (
+                        <a
+                          className="submission-receipt-file"
+                          href={getSubmissionReceiptImage(viewSubmission)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <span style={{ fontSize: 28 }}>📄</span>
+                          Open receipt (PDF)
+                        </a>
+                      )
+                    ) : (
+                      <span className="dashboard-empty-cell">No receipt attached.</span>
+                    )}
+                  </div>
+                </>
+              )}
 
               {statusUpdateError ? (
                 <p className="dashboard-state dashboard-state-error">{statusUpdateError}</p>
@@ -1700,46 +2089,108 @@ export default function App() {
             </div>
 
             <div className="submission-detail-modal-actions">
-              <label className="submission-status-field">
-                <span>Status</span>
-                <select
-                  value={orderStatusDraft}
-                  onChange={(event) => setOrderStatusDraft(event.target.value)}
-                >
-                  <option value="" disabled>Select status</option>
-                  {ORDER_STATUS_OPTIONS.map((status) => (
-                    <option key={status} value={status}>
-                      {status.charAt(0).toUpperCase() + status.slice(1)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {isEditingMode ? (
+                <>
+                  <label className="submission-status-field">
+                    <span>Status</span>
+                    <select
+                      value={orderStatusDraft}
+                      onChange={(event) => setOrderStatusDraft(event.target.value)}
+                      className={`status-select-${orderStatusDraft}`}
+                    >
+                      <option value="" disabled>Select status</option>
+                      {ORDER_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status.charAt(0).toUpperCase() + status.slice(1)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-              <label className="submission-price-field">
-                <span>Product Price</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="Enter product price"
-                  value={orderPriceDraft}
-                  onChange={(event) => setOrderPriceDraft(event.target.value)}
-                />
-              </label>
+                  <label className="submission-price-field">
+                    <span>Product Price</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Enter product price"
+                      value={orderPriceDraft}
+                      onChange={(event) => setOrderPriceDraft(event.target.value)}
+                    />
+                  </label>
 
-              <button
-                type="button"
-                className="primary-button"
-                disabled={
-                  isUpdatingStatus ||
-                  !orderStatusDraft ||
-                  !Number.isFinite(Number(orderPriceDraft)) ||
-                  Number(orderPriceDraft) <= 0
-                }
-                onClick={() => handleUpdateOrder(viewSubmission, orderStatusDraft, orderPriceDraft)}
-              >
-                {isUpdatingStatus ? "Saving..." : "Save"}
-              </button>
+                  <button
+                    type="button"
+                    className="secondary-button compact-button"
+                    onClick={() => setIsEditingMode(false)}
+                    disabled={isUpdatingStatus}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    className="primary-button compact-button"
+                    onClick={handleSaveEditedDetails}
+                    disabled={
+                      isUpdatingStatus ||
+                      !editNameDraft.trim() ||
+                      !editPhoneDraft.trim() ||
+                      !editAddressDraft.trim() ||
+                      !editCityDraft.trim() ||
+                      !Number.isFinite(Number(editAdvanceDraft)) ||
+                      Number(editAdvanceDraft) < 0
+                    }
+                  >
+                    {isUpdatingStatus ? "Saving..." : "Save Changes"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <label className="submission-status-field">
+                    <span>Status</span>
+                    <select
+                      value={orderStatusDraft}
+                      onChange={(event) => setOrderStatusDraft(event.target.value)}
+                      className={`status-select-${orderStatusDraft}`}
+                    >
+                      <option value="" disabled>Select status</option>
+                      {ORDER_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status.charAt(0).toUpperCase() + status.slice(1)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="submission-price-field">
+                    <span>Product Price</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Enter product price"
+                      value={orderPriceDraft}
+                      onChange={(event) => setOrderPriceDraft(event.target.value)}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    className="primary-button compact-button"
+                    disabled={
+                      isUpdatingStatus ||
+                      !orderStatusDraft ||
+                      !Number.isFinite(Number(orderPriceDraft)) ||
+                      Number(orderPriceDraft) <= 0 ||
+                      (viewSubmission.status || "").toLowerCase() === "delivered"
+                    }
+                    onClick={() => handleUpdateOrder(viewSubmission, orderStatusDraft, orderPriceDraft)}
+                  >
+                    {isUpdatingStatus ? "Saving..." : "Save"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -2071,6 +2522,46 @@ export default function App() {
       <footer className="page-footer">
         <p>Wizzzey. Simple, secure, and reliable order submissions.</p>
       </footer>
+
+      {confirmModal.isOpen ? (
+        <div className="image-modal-backdrop" role="presentation" onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })}>
+          <div className="custom-confirm-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="custom-confirm-modal-header">
+              <strong>{confirmModal.title}</strong>
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="custom-confirm-modal-body">
+              <p>{confirmModal.message}</p>
+            </div>
+            <div className="custom-confirm-modal-actions">
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                onClick={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+              >
+                {confirmModal.cancelText}
+              </button>
+              <button
+                type="button"
+                className={confirmModal.isDanger ? "danger-button compact-button" : "primary-button compact-button"}
+                onClick={() => {
+                  if (confirmModal.onConfirm) {
+                    confirmModal.onConfirm();
+                  }
+                }}
+              >
+                {confirmModal.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

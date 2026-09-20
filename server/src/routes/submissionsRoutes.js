@@ -18,7 +18,9 @@ import {
     updateSubmissionStatus,
     handleNCMWebhookEvent,
     createShipmentForOrder,
-    getOrderStats
+    getOrderStats,
+    deleteSubmission,
+    updateSubmission
 } from "../services/submissionService.js";
 
 const upload = multer({
@@ -174,6 +176,46 @@ router.get("/:submissionReference", requireAdminToken, async (req, res, next) =>
         }
 
         res.json({ data: enrichedSubmission });
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.delete("/:id", requireAdminToken, async (req, res, next) => {
+    try {
+        const id = Number.parseInt(req.params.id, 10);
+
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({ error: "A valid submission id is required." });
+        }
+
+        const deleted = await deleteSubmission(id);
+
+        if (!deleted) {
+            return res.status(404).json({ error: "Submission not found." });
+        }
+
+        res.json({ message: "Order deleted successfully.", data: deleted });
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.put("/:id", requireAdminToken, async (req, res, next) => {
+    try {
+        const id = Number.parseInt(req.params.id, 10);
+
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({ error: "A valid submission id is required." });
+        }
+
+        const updated = await updateSubmission(id, req.body);
+
+        if (!updated) {
+            return res.status(404).json({ error: "Submission not found." });
+        }
+
+        res.json({ message: "Order updated successfully.", data: updated });
     } catch (error) {
         next(error);
     }
