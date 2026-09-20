@@ -94,6 +94,50 @@ function isReceiptImageUrl(url) {
   return Boolean(url) && !/\.pdf($|\?)/i.test(url);
 }
 
+function ViewIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4 20h4l10.5-10.5a1.7 1.7 0 0 0 0-2.4l-1.6-1.6a1.7 1.7 0 0 0-2.4 0L4 16v4Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="m13.5 6.5 4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4.5 6h15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M9 6V4.8A1.8 1.8 0 0 1 10.8 3h2.4A1.8 1.8 0 0 1 15 4.8V6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M7.5 6.5h9l-.6 12.2a1.6 1.6 0 0 1-1.6 1.5H9.7a1.6 1.6 0 0 1-1.6-1.5L7.5 6.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M10.5 10v5.5M13.5 10v5.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ActionIconButton({ title, ariaLabel, className = "", onClick, disabled = false, children }) {
+  return (
+    <button
+      type="button"
+      className={`manage-icon-button ${className}`.trim()}
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={ariaLabel}
+    >
+      {children}
+    </button>
+  );
+}
+
 const ADMIN_TOKEN_STORAGE_KEY = "adminToken";
 
 function createPreviewEntry(file) {
@@ -530,7 +574,7 @@ export default function App() {
     };
   }, [isAdminDashboardRoute, isAdminUnlocked, adminToken]);
 
-  function openSubmissionView(submission) {
+  function openSubmissionView(submission, startInEditMode = false) {
     setStatusUpdateError("");
     setOrderPriceDraft(submission.productPrice != null ? String(submission.productPrice) : "");
     setOrderStatusDraft(submission.status || "placed");
@@ -541,7 +585,7 @@ export default function App() {
     setEditAdvanceDraft(submission.advanceAmount != null ? String(submission.advanceAmount) : "0");
     setEditSizeDraft(submission.productSize || "");
     setEditTrackingDraft(submission.trackingId || "");
-    setIsEditingMode(false);
+    setIsEditingMode(startInEditMode);
     setViewSubmission(submission);
   }
 
@@ -1342,7 +1386,10 @@ export default function App() {
           <div className="dashboard-header">
             <div>
               <h2>{isAdminManageRoute ? "Manage Orders" : "Order Submissions"}</h2>
-              {isAdminManageRoute ? (
+            </div>
+
+            {isAdminManageRoute ? (
+              <div className="dashboard-header-actions">
                 <div className="manage-cleanup">
                   <button
                     type="button"
@@ -1355,7 +1402,8 @@ export default function App() {
                   {cleanupMessage ? <p className="dashboard-state">{cleanupMessage}</p> : null}
                   {cleanupError ? <p className="dashboard-state dashboard-state-error">{cleanupError}</p> : null}
                 </div>
-              ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="dashboard-summary">
@@ -1374,7 +1422,6 @@ export default function App() {
               <span>Shown</span>
             </div>
           </div>
-        </div>
 
         <div className="dashboard-filters">
           <div className="dashboard-filters-row dashboard-filters-row-single">
@@ -1478,78 +1525,102 @@ export default function App() {
             {submissions.map((submission) => {
               const productImagesForSubmission = getSubmissionProductImages(submission);
               const receiptUrl = getSubmissionReceiptImage(submission);
+              const orderDate = formatDateTime(submission.created_at);
 
               return (
                 <article className="manage-item" key={`manage-${submission.orderId || submission.id}`}>
                   <div className="manage-item-header">
-                    <div>
-                      <strong>{submission.orderId || "—"}</strong>
-                      <p>{submission.name || "—"}</p>
+                    <div className="manage-item-title">
+                      <strong className="manage-item-order-id">{submission.orderId || "—"}</strong>
+
+                      <div className="manage-item-status-group">
+                        <span className={`status-pill status-pill-${submission.status || "placed"}`}>
+                          {(submission.status || "placed").toUpperCase()}
+                        </span>
+
+                        <span className={`receipt-pill ${receiptUrl ? "receipt-pill-ok" : "receipt-pill-missing"}`}>
+                          {receiptUrl ? "Receipt" : "No receipt"}
+                        </span>
+                      </div>
+
+                      <div className="manage-item-customer">
+                        <strong>{submission.name || "—"}</strong>
+                        <span>{submission.phone || "—"}</span>
+                      </div>
                     </div>
 
-                    <div className="manage-item-badges">
-                      <span className={`status-pill status-pill-${submission.status || "placed"}`}>
-                        {(submission.status || "placed").toUpperCase()}
-                      </span>
+                    <div className="manage-item-actions" aria-label="Order actions">
+                      <ActionIconButton
+                        title="View order"
+                        ariaLabel="View order"
+                        className="manage-icon-button-view"
+                        onClick={() => openSubmissionView(submission)}
+                      >
+                        <ViewIcon />
+                      </ActionIconButton>
 
-                      <span className={`receipt-pill ${receiptUrl ? "receipt-pill-ok" : "receipt-pill-missing"}`}>
-                        {receiptUrl ? "Receipt" : "No receipt"}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="manage-item-gallery">
-                    {productImagesForSubmission.length > 0 ? (
-                      productImagesForSubmission.slice(0, 3).map((imageUrl, index) => (
-                        <button
-                          type="button"
-                          key={`${submission.orderId || submission.id}-${index}-${imageUrl}`}
-                          className="manage-thumb-button"
-                          onClick={() => setSelectedImageUrl(imageUrl)}
+                      {(submission.status || "").toLowerCase() !== "delivered" && (
+                        <ActionIconButton
+                          title="Edit order"
+                          ariaLabel="Edit order"
+                          className="manage-icon-button-edit"
+                          onClick={() => openSubmissionView(submission, true)}
                         >
-                          <img src={imageUrl} alt={`Preview ${index + 1}`} loading="lazy" />
-                        </button>
-                      ))
-                    ) : (
-                      <div className="submission-preview-empty">No product images.</div>
-                    )}
+                          <EditIcon />
+                        </ActionIconButton>
+                      )}
+
+                      <ActionIconButton
+                        title="Delete order"
+                        ariaLabel="Delete order"
+                        className="manage-icon-button-delete"
+                        onClick={() => handleDeleteOrder(submission)}
+                        disabled={isDeletingOrder}
+                      >
+                        <TrashIcon />
+                      </ActionIconButton>
+                    </div>
                   </div>
 
-                  <div className="manage-item-meta">
+                  <div className="manage-item-details">
                     <div>
-                      <span>City</span>
-                      <strong>{submission.city || "—"}</strong>
+                      <span>Order Date</span>
+                      <strong>{orderDate}</strong>
                     </div>
                     <div>
-                      <span>Advance</span>
-                      <strong>{formatCurrency(submission.advanceAmount)}</strong>
+                      <span>Total Amount</span>
+                      <strong>{formatCurrency(submission.productPrice)}</strong>
                     </div>
                     <div>
                       <span>Tracking ID</span>
                       <strong>{submission.trackingId || "—"}</strong>
                     </div>
-                    <div>
-                      <span>Created</span>
-                      <strong>{formatDateTime(submission.created_at)}</strong>
-                    </div>
                   </div>
 
-                  <div className="manage-item-actions">
-                    <button
-                      type="button"
-                      className="secondary-button compact-button"
-                      onClick={() => openSubmissionView(submission)}
-                    >
-                      View
-                    </button>
-                    <button
-                      type="button"
-                      className="danger-button compact-button"
-                      onClick={() => handleDeleteOrder(submission)}
-                      disabled={isDeletingOrder}
-                    >
-                      {isDeletingOrder ? "Deleting..." : "Delete"}
-                    </button>
+                  <div className="manage-item-footer">
+                    <div className="manage-item-gallery">
+                      {productImagesForSubmission.length > 0 ? (
+                        productImagesForSubmission.slice(0, 3).map((imageUrl, index) => (
+                          <button
+                            type="button"
+                            key={`${submission.orderId || submission.id}-${index}-${imageUrl}`}
+                            className="manage-thumb-button"
+                            onClick={() => setSelectedImageUrl(imageUrl)}
+                            title={`Open image ${index + 1}`}
+                            aria-label={`Open image ${index + 1}`}
+                          >
+                            <img src={imageUrl} alt={`Preview ${index + 1}`} loading="lazy" />
+                          </button>
+                        ))
+                      ) : (
+                        <div className="submission-preview-empty">No product images.</div>
+                      )}
+                    </div>
+
+                    <div className="manage-item-secondary">
+                      <span>{submission.trackingId ? `Tracking #${submission.trackingId}` : "Tracking ID hidden"}</span>
+                      <span>{receiptUrl ? "Receipt attached" : "No receipt uploaded"}</span>
+                    </div>
                   </div>
                 </article>
               );
@@ -2017,16 +2088,6 @@ export default function App() {
                 </>
               ) : (
                 <>
-                  {(viewSubmission.status || "").toLowerCase() !== "delivered" && (
-                    <button
-                      type="button"
-                      className="secondary-button compact-button"
-                      onClick={() => setIsEditingMode(true)}
-                    >
-                      Edit Details
-                    </button>
-                  )}
-
                   <label className="submission-status-field">
                     <span>Status</span>
                     <select
