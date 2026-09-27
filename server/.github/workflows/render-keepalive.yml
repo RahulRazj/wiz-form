@@ -1,0 +1,24 @@
+name: Render Keep Alive
+
+on:
+  schedule:
+    # Every 10 minutes
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render health check
+        run: |
+          HOUR=$(TZ=Asia/Kolkata date +%H)
+
+          if [ "$HOUR" -ge 6 ]; then
+            echo "Outside sleep hours. Pinging service..."
+            curl --fail --silent --show-error \
+              --max-time 120 \
+              "https://wiz-form.onrender.com/api/health"
+          else
+            echo "Sleep window (12 AM - 6 AM IST). Skipping ping."
+          fi
